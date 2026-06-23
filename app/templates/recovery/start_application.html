@@ -1,0 +1,77 @@
+{% extends 'base.html' %}{% block content %}
+<h3>{% if app_type == 'reinstatement' %}Reinstate Lapsed Policy{% else %}Start New Policy from Lapsed Client{% endif %}</h3>
+
+{% if script_id %}<div class="alert alert-info"><b>Script completed.</b> The completed Sales Script + QA PDF is stored for Admin / Branch Manager review.</div>{% endif %}
+<div class="alert alert-success">
+  <b>No joining fee applies.</b> This client came from the lapsed policy recovery process.
+  The selected script answers have been pulled through where available.
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <p><b>Old Policy:</b> {{p.policy_number}}</p>
+    <p><b>Client:</b> {{p.initials}} {{p.surname}}</p>
+    <p><b>Cell:</b> {{p.cell_number}}</p>
+    <p><b>Address:</b> {{p.address}}</p>
+  </div>
+</div>
+
+<form method="post" class="row g-2">
+  <input type="hidden" name="script_id" value="{{script_id or ''}}">
+  <div class="col-md-6">
+    <label>Policy Product</label>
+    <select class="form-control" name="product_id" required>
+      <option value="">Select policy</option>
+      {% for prod in products %}
+      <option value="{{prod.id}}" {% if selected_product and selected_product.id == prod.id %}selected{% endif %}>{{prod.product_name}} - {{prod.plan_name}} / R{{prod.monthly_premium}} / Cover R{{prod.cover_amount}}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label>Payment Method</label>
+    <select class="form-control" name="payment_method">
+      {% for method in ['Cash','Debit Order','Stop Order'] %}
+      <option value="{{method}}" {% if selected_payment == method %}selected{% endif %}>{{method}}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label>Send Documents By</label>
+    <select class="form-control" name="delivery_method">
+      <option value="">Do not send yet</option>
+      <option value="email" {% if selected_delivery == 'email' %}selected{% endif %}>Email</option>
+      <option value="whatsapp" {% if selected_delivery == 'whatsapp' %}selected{% endif %}>WhatsApp</option>
+      <option value="sms" {% if selected_delivery == 'sms' %}selected{% endif %}>SMS</option>
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label>First Names</label>
+    <input class="form-control" name="first_names" value="{{p.initials}}">
+  </div>
+  <div class="col-md-3">
+    <label>Surname</label>
+    <input class="form-control" name="surname" value="{{p.surname}}">
+  </div>
+  <div class="col-md-3">
+    <label>ID Number</label>
+    <input class="form-control" name="id_number" required>
+  </div>
+  <div class="col-md-3">
+    <label>Cell Number</label>
+    <input class="form-control" name="cell_number" value="{{p.cell_number}}">
+  </div>
+  <div class="col-md-6">
+    <label>Email</label>
+    <input class="form-control" name="email" type="email" required>
+  </div>
+  <div class="col-12">
+    <label>Address</label>
+    <textarea class="form-control" name="address">{{p.address}}</textarea>
+  </div>
+
+  <div class="col-12">
+    <button class="btn btn-success">Create Application and Continue</button>
+    <a class="btn btn-secondary" href="{{url_for('recovery.queue')}}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

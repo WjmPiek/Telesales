@@ -1,0 +1,117 @@
+{% extends 'base.html' %}{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3>TELESALES FUNERAL COVER SALES SCRIPT</h3>
+  <span class="badge bg-primary">Step {{step.id}} of {{total_steps}}</span>
+</div>
+<div class="progress mb-3"><div class="progress-bar" style="width: {{progress}}%"></div></div>
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3"><div class="card-header"><b>Client Details</b></div><div class="card-body small">
+      <p><b>Client:</b> {{session.client_name}}</p>
+      <p><b>Cell:</b> {{session.client_cell}}</p>
+      <p><b>Old Policy:</b> {{session.policy_number}}</p>
+      <p><b>Agent:</b> {{current_user.name}}</p>
+      <p><b>QA Ref:</b> {{step.qa}}</p>
+      {% if selected_product %}
+      <hr>
+      <p><b>Selected Policy:</b><br>{{selected_product.product_name}} / {{selected_product.plan_name}}</p>
+      <p><b>Premium:</b> R {{'%.2f'|format(selected_product.monthly_premium or 0)}}</p>
+      <p><b>Cover:</b> R {{'%.2f'|format(selected_product.cover_amount or 0)}}</p>
+      {% endif %}
+      {% if selected_payment %}<p><b>Payment:</b> {{selected_payment}}</p>{% endif %}
+    </div></div>
+    <div class="card"><div class="card-header"><b>Agent Tip</b></div><div class="card-body small">
+      Read one block at a time. Pause for the client to answer before clicking the response button.
+    </div></div>
+  </div>
+  <div class="col-md-8">
+    <div class="card shadow-sm">
+      <div class="card-header bg-dark text-white"><b>{{step.id}}. {{step.title}}</b></div>
+      <div class="card-body">
+        <h5 class="mb-3">Agent must say:</h5>
+        <div class="mb-4">
+          {% for block in spoken_text.split('\n\n') %}
+            {% if block.strip() %}
+              <div class="p-3 mb-2 rounded border bg-light" style="font-size:1.08rem; line-height:1.55; white-space:pre-wrap;">{{ block.strip() }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        {% if step.id == 25 %}
+        <div class="card border-primary mb-3">
+          <div class="card-header bg-primary text-white"><b>Confirm these client details</b></div>
+          <div class="card-body">
+            <div class="row small">
+              <div class="col-md-6"><b>Full names / Surname:</b><br>{{session.client_name}}</div>
+              <div class="col-md-6"><b>Contact number:</b><br>{{session.client_cell}}</div>
+              <div class="col-md-6 mt-2"><b>Old policy number:</b><br>{{session.policy_number}}</div>
+              <div class="col-md-6 mt-2"><b>Address:</b><br>{{session.lapsed_policy.address if session.lapsed_policy else ''}}</div>
+            </div>
+            <div class="text-muted small mt-2">Confirm ID number, date of birth, postal address and email address on the next application screen if not available from the lapse data.</div>
+          </div>
+        </div>
+        {% endif %}
+
+        <h5>Question / Confirmation</h5>
+        <div class="alert alert-info">{{step.question}}</div>
+        <form method="post">
+          {% if step.id == 9 %}
+            <label class="form-label"><b>Who would the client like to cover?</b></label>
+            <div class="row g-2 mb-3">
+              <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="myself_only">Myself only</button></div>
+              <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="myself_spouse">Myself and spouse</button></div>
+              <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="myself_spouse_children">Myself, wife/spouse and children</button></div>
+              <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="extended_family">Extended family</button></div>
+            </div>
+            <label class="form-label">Client age for product filtering</label>
+            <input class="form-control mb-3" type="number" name="client_age" value="{{client_age or ''}}" placeholder="Enter client age if known">
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <input type="hidden" name="answer" value="yes">
+          {% elif step.id in [11,14,17] %}
+            <div class="alert alert-secondary">Available policies are filtered by the selected cover type and client age where available.</div>
+            <div class="list-group mb-3">
+              {% for prod in products %}
+              <label class="list-group-item">
+                <input class="form-check-input me-2" type="radio" name="product_id" value="{{prod.id}}" {% if selected_product and selected_product.id == prod.id %}checked{% endif %} required>
+                <b>{{prod.product_name}} / {{prod.plan_name}}</b><br>
+                <span class="small">Premium: R {{'%.2f'|format(prod.monthly_premium or 0)}} | Cover: R {{'%.2f'|format(prod.cover_amount or 0)}} | Age: {{prod.min_age or '0'}} - {{prod.max_age or 'No max'}} | Waiting: {{prod.waiting_period_months or 0}} months</span>
+              </label>
+              {% else %}
+              <div class="alert alert-warning">No active products matched the selected criteria. Check policy import/product rules.</div>
+              {% endfor %}
+            </div>
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <button class="btn btn-success btn-lg" name="answer" value="yes">Select Policy and Continue</button>
+          {% elif step.id == 19 %}
+            <label class="form-label"><b>Select payment method</b></label>
+            <div class="row g-2 mb-3">
+              <div class="col-md-4"><button class="btn btn-outline-success w-100" name="payment_method" value="Cash">Cash</button></div>
+              <div class="col-md-4"><button class="btn btn-outline-success w-100" name="payment_method" value="Debit Order">Debit Order</button></div>
+              <div class="col-md-4"><button class="btn btn-outline-success w-100" name="payment_method" value="Stop Order">Stop Order</button></div>
+            </div>
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <input type="hidden" name="answer" value="yes">
+          {% elif step.id == 31 %}
+            <label class="form-label"><b>How must the signing documents be sent?</b></label>
+            <div class="row g-2 mb-3">
+              <div class="col-md-4"><button class="btn btn-outline-primary w-100" name="delivery_method" value="email">Email</button></div>
+              <div class="col-md-4"><button class="btn btn-outline-primary w-100" name="delivery_method" value="whatsapp">WhatsApp</button></div>
+              <div class="col-md-4"><button class="btn btn-outline-primary w-100" name="delivery_method" value="sms">SMS</button></div>
+            </div>
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <input type="hidden" name="answer" value="yes">
+          {% else %}
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <button class="btn btn-success btn-lg" name="answer" value="yes">Yes - Continue</button>
+            {% if step.block_on_no %}
+            <button class="btn btn-danger btn-lg" name="answer" value="no">No - Stop Call</button>
+            {% else %}
+            <button class="btn btn-warning btn-lg" name="answer" value="no">No / Not Applicable</button>
+            {% endif %}
+          {% endif %}
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

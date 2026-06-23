@@ -1,0 +1,28 @@
+{% extends 'base.html' %}{% block content %}
+<h3>Log Recovery Call</h3>
+<p><b>{{p.policy_number}}</b> - {{p.initials}} {{p.surname}} - {{p.cell_number}}</p>
+
+<div class="alert alert-info">
+  If the client wants to reinstate or join a new policy, choose <b>Wants Reinstatement</b> or
+  <b>Wants New Policy</b>. The system will create a full application and automatically waive the joining fee.
+</div>
+
+<form method="post" class="row g-2">
+  <div class="col-md-4">
+    <label>Outcome</label>
+    <select class="form-control" name="outcome">{% for o in outcomes %}<option>{{o}}</option>{% endfor %}</select>
+  </div>
+  <div class="col-md-4">
+    <label>Follow-up Date</label>
+    <input class="form-control" name="follow_up_date" type="date">
+  </div>
+  <div class="col-12">
+    <label>Notes</label>
+    <textarea class="form-control" name="notes"></textarea>
+  </div>
+  <div>
+    <button class="btn btn-success">Save Call</button>
+    <a class="btn btn-secondary" href="{{url_for('recovery.queue')}}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

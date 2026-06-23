@@ -1,0 +1,29 @@
+{% extends 'base.html' %}{% block content %}
+<h3>Lapsed Policy Recovery</h3>
+
+<form class="mb-3" method="post" action="{{url_for('recovery.import_lapsed')}}" enctype="multipart/form-data">
+  <input type="file" name="file" accept=".xlsx" required>
+  <button class="btn btn-primary btn-sm">Import Lapsed Policies</button>
+</form>
+
+<table class="table table-sm table-striped">
+  <tr>
+    <th>Policy</th><th>Client</th><th>Cell</th><th>Total</th><th>Status</th><th>Next Action</th><th>Actions</th>
+  </tr>
+  {% for p in policies %}
+  <tr>
+    <td>{{p.policy_number}}</td>
+    <td>{{p.initials}} {{p.surname}}</td>
+    <td>{{p.cell_number}}</td>
+    <td>{{p.total}}</td>
+    <td>{{p.recovery_status}}</td>
+    <td>{{p.next_action_date}}</td>
+    <td>
+      <a class="btn btn-sm btn-outline-primary" href="{{url_for('recovery.log_call',policy_id=p.id)}}">Log Call</a>
+      <a class="btn btn-sm btn-success" href="{{url_for('recovery.start_script', policy_id=p.id, app_type='reinstatement')}}">Reinstate</a>
+      <a class="btn btn-sm btn-secondary" href="{{url_for('recovery.start_script', policy_id=p.id, app_type='new')}}">New Policy</a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}
