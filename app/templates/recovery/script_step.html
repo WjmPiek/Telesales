@@ -11,6 +11,8 @@
       <p><b>Cell:</b> {{session.client_cell}}</p>
       <p><b>Old Policy:</b> {{session.policy_number}}</p>
       <p><b>Agent:</b> {{current_user.name}}</p>
+      <p><b>ID Number:</b> {{client_id_number or 'Not captured yet'}}</p>
+      <p><b>Calculated Age:</b> {{client_age if client_age is not none else 'Not available'}}</p>
       <p><b>QA Ref:</b> {{step.qa}}</p>
       {% if selected_product and step.id in [17,18,24,25] %}
       <hr>
@@ -39,19 +41,30 @@
 
         {% if step.id == 25 %}
         <div class="card border-primary mb-3">
-          <div class="card-header bg-primary text-white"><b>Confirm these client details</b></div>
+          <div class="card-header bg-primary text-white"><b>Confirm client, members and selected policy</b></div>
           <div class="card-body">
+            <h6>Client Details</h6>
             <div class="row small">
               <div class="col-md-6"><b>Full names / Surname:</b><br>{{session.client_name}}</div>
-              <div class="col-md-6"><b>Contact number:</b><br>{{session.client_cell}}</div>
+              <div class="col-md-6"><b>ID Number:</b><br>{{client_id_number or 'Confirm on application screen'}}</div>
+              <div class="col-md-6 mt-2"><b>Date of birth / Age:</b><br>{{client_age if client_age is not none else 'Confirm on application screen'}}</div>
+              <div class="col-md-6 mt-2"><b>Contact number:</b><br>{{session.client_cell}}</div>
               <div class="col-md-6 mt-2"><b>Old policy number:</b><br>{{session.policy_number}}</div>
               <div class="col-md-6 mt-2"><b>Address:</b><br>{{session.lapsed_policy.address if session.lapsed_policy else ''}}</div>
             </div>
-            <div class="text-muted small mt-2">Confirm ID number, date of birth, postal address and email address on the next application screen if not available from the lapse data.</div>
+            <hr>
+            <h6>Members on Product</h6>
+            {% if existing_members %}
+              <ul class="small">{% for m in existing_members %}<li><b>{{m.role}}:</b> {{m.name}} {% if m.id %}({{m.id}}){% endif %}</li>{% endfor %}</ul>
+            {% else %}
+              <p class="small text-muted">No existing member rows were imported for this lapsed policy.</p>
+            {% endif %}
             {% if selected_product %}
               <hr>
-              <p><b>Selected Product:</b> {{selected_product.product_name}} / {{selected_product.plan_name}}</p>
+              <h6>Selected Product and Benefits</h6>
+              <p><b>Product:</b> {{selected_product.product_name}} / {{selected_product.plan_name}}</p>
               <p><b>Premium:</b> R {{'%.2f'|format(selected_product.monthly_premium or 0)}} | <b>Cover:</b> R {{'%.2f'|format(selected_product.cover_amount or 0)}}</p>
+              {% if script_payload.additional_benefits %}<p><b>Additional Benefits:</b> {{script_payload.additional_benefits}}</p>{% endif %}
             {% endif %}
           </div>
         </div>
@@ -83,6 +96,19 @@
         <div class="alert alert-info">{{step.question}}</div>
         <form method="post">
           {% if step.id == 9 %}
+            <div class="alert alert-light border">
+              <b>Product filtering:</b> the system uses the client's SA ID number to calculate age and only list products in the correct age range.
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-md-6">
+                <label class="form-label">Client ID Number</label>
+                <input class="form-control" name="client_id_number" value="{{client_id_number or ''}}" maxlength="13" placeholder="Enter SA ID number if not imported">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Calculated Age</label>
+                <input class="form-control" type="number" name="client_age" value="{{client_age or ''}}" placeholder="Auto-calculated from ID where available" readonly>
+              </div>
+            </div>
             <label class="form-label"><b>Who would the client like to cover?</b></label>
             <div class="row g-2 mb-3">
               <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="myself_only">Myself only</button></div>
@@ -90,8 +116,6 @@
               <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="myself_spouse_children">Myself, wife/spouse and children</button></div>
               <div class="col-md-6"><button class="btn btn-outline-primary w-100" name="coverage_choice" value="extended_family">Extended family</button></div>
             </div>
-            <label class="form-label">Client age for product filtering</label>
-            <input class="form-control mb-3" type="number" name="client_age" value="{{client_age or ''}}" placeholder="Enter client age if known">
             <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
             <input type="hidden" name="answer" value="yes">
           {% elif step.id == 11 %}
@@ -149,6 +173,33 @@
             </div>
             <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
             <input type="hidden" name="answer" value="yes">
+          {% elif step.id == 26 %}
+            <div class="alert alert-light border">
+              <b>Confirm beneficiary details with the client.</b> These details will pull through to the application documents.
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-md-5"><label class="form-label">Beneficiary Name</label><input class="form-control" name="beneficiary_name" value="{{selected_beneficiary.name}}"></div>
+              <div class="col-md-4"><label class="form-label">Beneficiary Contact Number</label><input class="form-control" name="beneficiary_contact" value="{{selected_beneficiary.contact}}"></div>
+              <div class="col-md-3"><label class="form-label">Relationship</label><input class="form-control" name="beneficiary_relationship" value="{{selected_beneficiary.relationship}}"></div>
+            </div>
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <button class="btn btn-success btn-lg" name="answer" value="yes">Beneficiary Confirmed</button>
+          {% elif step.id == 27 %}
+            {% if selected_payment == 'Debit Order' %}
+              <div class="alert alert-warning">Capture the debit order details that the agent must read back to the client.</div>
+              <div class="row g-2 mb-3">
+                <div class="col-md-4"><label class="form-label">Account Holder</label><input class="form-control" name="account_holder" value="{{selected_bank.account_holder}}"></div>
+                <div class="col-md-4"><label class="form-label">Bank Name</label><input class="form-control" name="bank_name" value="{{selected_bank.bank_name}}"></div>
+                <div class="col-md-4"><label class="form-label">Account Number</label><input class="form-control" name="account_number" value="{{selected_bank.account_number}}"></div>
+                <div class="col-md-4"><label class="form-label">Branch Code</label><input class="form-control" name="branch_code" value="{{selected_bank.branch_code}}"></div>
+                <div class="col-md-4"><label class="form-label">Account Type</label><input class="form-control" name="account_type" value="{{selected_bank.account_type}}"></div>
+                <div class="col-md-4"><label class="form-label">Debit Day</label><input class="form-control" name="debit_day" value="{{selected_bank.debit_day}}"></div>
+              </div>
+            {% else %}
+              <div class="alert alert-info">Debit order details are not required because payment method is {{selected_payment or 'not Debit Order'}}.</div>
+            {% endif %}
+            <textarea class="form-control mb-3" name="note" rows="2" placeholder="Optional notes / client comments"></textarea>
+            <button class="btn btn-success btn-lg" name="answer" value="yes">Continue</button>
           {% elif step.id == 31 %}
             <label class="form-label"><b>How must the signing documents be sent?</b></label>
             <div class="row g-2 mb-3">

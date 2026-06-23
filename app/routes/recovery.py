@@ -2,6 +2,7 @@ from datetime import date, timedelta, datetime
 import secrets
 import json
 import os
+import re
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, send_file, abort
 from flask_login import login_required, current_user
 from openpyxl import load_workbook
@@ -432,10 +433,17 @@ def _client_surname(session):
 
 
 def _client_title(session):
-    # Lapsed policy imports often do not contain a formal title. Use a neutral Mr/Mrs prefix
-    # so the agent addresses the client professionally and can correct it during details confirmation.
+    # Use captured title first. If no title exists, infer a respectful salutation from the SA ID gender digits where possible.
     title = _answer_value(session, "client_title")
-    return (title or "Mr/Mrs").strip()
+    if title:
+        return str(title).strip()
+    id_number = _script_client_id_number(session)
+    try:
+        if id_number and len(id_number) >= 10 and id_number[:10].isdigit():
+            return "Mrs" if int(id_number[6:10]) < 5000 else "Mr"
+    except Exception:
+        pass
+    return "Mr/Mrs"
 
 def _client_display(session):
     surname = _client_surname(session)
@@ -451,10 +459,35 @@ def _selected_additional_benefits(session):
     return _answer_value(session, "additional_benefits", "") or ""
 
 
+def _script_client_id_number(session):
+    """Return the best available client ID number for script/product filtering."""
+    saved = _answer_value(session, "client_id_number")
+    if saved:
+        return str(saved).strip()
+    if session and session.lapsed_policy:
+        candidates = [
+            session.lapsed_policy.member_id,
+            session.lapsed_policy.policy_number,
+            session.lapsed_policy.comments,
+        ]
+        for value in candidates:
+            match = re.search(r"\b\d{13}\b", str(value or ""))
+            if match:
+                return match.group(0)
+    return ""
+
+
 def _script_client_age(session):
     age = _answer_value(session, "client_age")
     try:
-        return int(age) if str(age or "").strip() else None
+        if str(age or "").strip():
+            return int(age)
+    except Exception:
+        pass
+    id_number = _script_client_id_number(session)
+    try:
+        dob = dob_from_sa_id(id_number) if id_number else None
+        return age_from_dob(dob) if dob else None
     except Exception:
         return None
 
@@ -505,6 +538,47 @@ def _eligible_products_for_script(session):
                 continue
         eligible.append(prod)
     return _coverage_filter(eligible, coverage)
+
+def _selected_script_beneficiary(session):
+    return {
+        "name": _answer_value(session, "beneficiary_name", "") or "",
+        "contact": _answer_value(session, "beneficiary_contact", "") or "",
+        "relationship": _answer_value(session, "beneficiary_relationship", "") or "",
+    }
+
+
+def _selected_script_bank_details(session):
+    return {
+        "account_holder": _answer_value(session, "account_holder", "") or "",
+        "bank_name": _answer_value(session, "bank_name", "") or "",
+        "account_number": _answer_value(session, "account_number", "") or "",
+        "branch_code": _answer_value(session, "branch_code", "") or "",
+        "account_type": _answer_value(session, "account_type", "") or "",
+        "debit_day": _answer_value(session, "debit_day", "") or "",
+    }
+
+
+def _existing_member_summary(session):
+    p = session.lapsed_policy if session else None
+    if not p:
+        return []
+    rows = []
+    if p.surname or p.initials:
+        rows.append({"role": "Principal Member", "name": f"{p.initials or ''} {p.surname or ''}".strip(), "id": _script_client_id_number(session), "contact": p.cell_number or p.home_tel or ""})
+    # Current import file does not always include spouse/children/extended rows. Keep the structure so it can display when those fields are later imported.
+    return rows
+
+
+def _script_answers_for_application(session):
+    return {
+        "client_id_number": _script_client_id_number(session),
+        "client_age": _script_client_age(session),
+        "coverage_choice": _answer_value(session, "coverage_choice", "") or "",
+        "additional_benefits": _selected_additional_benefits(session),
+        "beneficiary": _selected_script_beneficiary(session),
+        "bank": _selected_script_bank_details(session),
+    }
+
 
 def _format_money(value):
     try:
@@ -737,7 +811,10 @@ def script_step(session_id):
         extra = {}
         if step["id"] == 9:
             extra["coverage_choice"] = request.form.get("coverage_choice") or answer
-            extra["client_age"] = request.form.get("client_age") or _script_client_age(session)
+            extra["client_id_number"] = request.form.get("client_id_number") or _script_client_id_number(session)
+            dob = dob_from_sa_id(extra["client_id_number"]) if extra.get("client_id_number") else None
+            calculated_age = age_from_dob(dob) if dob else None
+            extra["client_age"] = calculated_age or request.form.get("client_age") or _script_client_age(session)
             answer = extra["coverage_choice"] or answer
         if step["id"] == 11:
             if request.form.get("product_id"):
@@ -758,6 +835,19 @@ def script_step(session_id):
         if step["id"] == 19:
             extra["payment_method"] = request.form.get("payment_method") or answer
             answer = extra["payment_method"] or answer
+        if step["id"] == 26:
+            extra["beneficiary_name"] = request.form.get("beneficiary_name") or ""
+            extra["beneficiary_contact"] = request.form.get("beneficiary_contact") or ""
+            extra["beneficiary_relationship"] = request.form.get("beneficiary_relationship") or ""
+            answer = "yes"
+        if step["id"] == 27:
+            extra["account_holder"] = request.form.get("account_holder") or ""
+            extra["bank_name"] = request.form.get("bank_name") or ""
+            extra["account_number"] = request.form.get("account_number") or ""
+            extra["branch_code"] = request.form.get("branch_code") or ""
+            extra["account_type"] = request.form.get("account_type") or ""
+            extra["debit_day"] = request.form.get("debit_day") or ""
+            answer = "yes"
         if step["id"] == 31:
             extra["delivery_method"] = request.form.get("delivery_method") or answer
             answer = extra["delivery_method"] or answer
@@ -788,7 +878,7 @@ def script_step(session_id):
     products = _eligible_products_for_script(session) if step["id"] == 11 else []
     selected_product = _selected_script_product(session)
     spoken_text = _script_text_for_display(session, step)
-    return render_template("recovery/script_step.html", session=session, step=step, total_steps=total_steps, progress=progress, products=products, selected_product=selected_product, spoken_text=spoken_text, client_age=_script_client_age(session), selected_payment=_answer_value(session, "payment_method"), selected_delivery=_answer_value(session, "delivery_method"))
+    return render_template("recovery/script_step.html", session=session, step=step, total_steps=total_steps, progress=progress, products=products, selected_product=selected_product, spoken_text=spoken_text, client_age=_script_client_age(session), client_id_number=_script_client_id_number(session), selected_payment=_answer_value(session, "payment_method"), selected_delivery=_answer_value(session, "delivery_method"), selected_beneficiary=_selected_script_beneficiary(session), selected_bank=_selected_script_bank_details(session), existing_members=_existing_member_summary(session), script_payload=_script_answers_for_application(session))
 
 
 def _save_script_pdf(session):
@@ -874,6 +964,7 @@ def start_application(policy_id):
     selected_product = _selected_script_product(script_session) if script_session else None
     selected_payment = _answer_value(script_session, "payment_method") if script_session else ""
     selected_delivery = _answer_value(script_session, "delivery_method") if script_session else ""
+    script_payload = _script_answers_for_application(script_session) if script_session else {}
 
     if request.method == "POST":
         product_id = request.form.get("product_id") or (selected_product.id if selected_product else None)
@@ -885,8 +976,11 @@ def start_application(policy_id):
         application_ref = "APP-" + datetime.now().strftime("%Y%m%d") + "-" + secrets.token_hex(3).upper()
         first_names = request.form.get("first_names") or p.initials or ""
         surname = request.form.get("surname") or p.surname or ""
-        email = request.form.get("email") or ""
+        email = request.form.get("email") or getattr(script_session, "client_email", None) or ""
         cell = request.form.get("cell_number") or p.cell_number or p.home_tel or ""
+        beneficiary = script_payload.get("beneficiary", {}) if script_payload else {}
+        bank = script_payload.get("bank", {}) if script_payload else {}
+        id_number = request.form.get("id_number") or script_payload.get("client_id_number") or ""
 
         label = "Reinstatement" if app_type == "reinstatement" else "Lapsed New Policy"
         product_text = ((prod.product_name or "") + " " + (prod.plan_name or "")).lower()
@@ -904,7 +998,7 @@ def start_application(policy_id):
             agent_name=current_user.name,
             agent_code="",
             surname=surname,
-            id_number=request.form.get("id_number") or p.policy_number,
+            id_number=id_number,
             cell_number=cell,
             email=email,
             address=request.form.get("address") or p.address,
@@ -918,7 +1012,18 @@ def start_application(policy_id):
             status="Draft - Lapsed Recovery",
             form_template=form_template,
             payment_method=request.form.get("payment_method") or selected_payment,
-            date_of_birth=dob_from_sa_id(request.form.get("id_number") or "")
+            date_of_birth=dob_from_sa_id(id_number or ""),
+            plan_choice="Member + Product" if form_template == "member_product" else "",
+            total_payment=prod.monthly_premium,
+            beneficiary_full_names=beneficiary.get("name") or request.form.get("beneficiary_full_names") or "",
+            beneficiary_relationship=beneficiary.get("relationship") or request.form.get("beneficiary_relationship") or "",
+            account_holder=bank.get("account_holder") or request.form.get("account_holder") or "",
+            bank_name=bank.get("bank_name") or request.form.get("bank_name") or "",
+            account_number=bank.get("account_number") or request.form.get("account_number") or "",
+            branch_code=bank.get("branch_code") or request.form.get("branch_code") or "",
+            account_type=bank.get("account_type") or request.form.get("account_type") or "",
+            debit_day=bank.get("debit_day") or request.form.get("debit_day") or "",
+            product_dependents_json=json.dumps(_existing_member_summary(script_session)) if script_session else "[]"
         )
         if script_id:
             script_session = TelesalesScriptSession.query.get(script_id)
@@ -945,6 +1050,9 @@ def start_application(policy_id):
                 flash(f"Application created. Signing link prepared but not sent automatically. Link: {link}", "warning")
         else:
             flash("Application created from lapsed policy. Joining fee waived. Continue with signing process and welcome pack.", "success")
+        if delivery_method:
+            flash("Returning to the recovery queue so the next client can be contacted.", "info")
+            return redirect(url_for("recovery.queue"))
         return redirect(url_for("applications.view_application", app_id=a.id))
 
-    return render_template("recovery/start_application.html", p=p, products=products, app_type=app_type, script_id=script_id, selected_product=selected_product, selected_payment=selected_payment, selected_delivery=selected_delivery)
+    return render_template("recovery/start_application.html", p=p, products=products, app_type=app_type, script_id=script_id, selected_product=selected_product, selected_payment=selected_payment, selected_delivery=selected_delivery, script_payload=script_payload, existing_members=_existing_member_summary(script_session) if script_session else [])

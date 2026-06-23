@@ -1,1 +1,32 @@
-{% extends 'base.html' %}{% block content %}<h3>Dashboard</h3><div class="row">{% for k,v in stats.items() %}<div class="col-md-3"><div class="card"><div class="card-body"><h5>{{k|title}}</h5><h2>{{v}}</h2></div></div></div>{% endfor %}</div>{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<style>
+  .dashboard-card-link { text-decoration: none; color: inherit; display: block; }
+  .dashboard-card { cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; min-height: 150px; }
+  .dashboard-card:hover { transform: translateY(-4px); box-shadow: 0 0.75rem 1.5rem rgba(0,0,0,.12); }
+  .dashboard-card .card-body { padding: 1.5rem; }
+</style>
+<h3>Dashboard</h3>
+<div class="row g-3">
+  <div class="col-md-3">
+    <a class="dashboard-card-link" href="{{ url_for('applications.list_applications') }}">
+      <div class="card dashboard-card"><div class="card-body"><h5>Applications</h5><h2>{{ stats.get('applications', 0) }}</h2><small class="text-muted">Open applications</small></div></div>
+    </a>
+  </div>
+  <div class="col-md-3">
+    <a class="dashboard-card-link" href="{{ url_for('policies.list_products') }}">
+      <div class="card dashboard-card"><div class="card-body"><h5>Products</h5><h2>{{ stats.get('products', 0) }}</h2><small class="text-muted">Open product rules</small></div></div>
+    </a>
+  </div>
+  <div class="col-md-3">
+    <a class="dashboard-card-link" href="{{ url_for('recovery.queue') }}">
+      <div class="card dashboard-card"><div class="card-body"><h5>Lapsed</h5><h2>{{ stats.get('lapsed', 0) }}</h2><small class="text-muted">Open recovery queue</small></div></div>
+    </a>
+  </div>
+  <div class="col-md-3">
+    <a class="dashboard-card-link" href="{{ url_for('recovery.script_records') }}">
+      <div class="card dashboard-card"><div class="card-body"><h5>Calls</h5><h2>{{ stats.get('calls', 0) }}</h2><small class="text-muted">Open call/script records</small></div></div>
+    </a>
+  </div>
+</div>
+{% endblock %}
