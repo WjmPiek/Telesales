@@ -4,6 +4,7 @@ from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_required, current_user
 from app import db
 from app.models import ClientApplication, ClientFicaDocument, ComplianceReview, LapsedPolicy, TelesalesScriptSession, AuditLog
+from app.services.branch_access import scope_by_branch, ensure_branch_access, selected_branch_arg, branch_choices_from_model
 
 qa_bp = Blueprint('qa', __name__, url_prefix='/qa')
 
@@ -58,19 +59,14 @@ def qa_dashboard():
         flash('Only managers/compliance users can access QA.', 'danger')
         return redirect(url_for('main.dashboard'))
 
-    branch = request.args.get('branch') or ''
-    app_q = ClientApplication.query
-    lead_q = LapsedPolicy.query
-    if branch:
-        app_q = app_q.filter(ClientApplication.branch == branch)
-        lead_q = lead_q.filter(LapsedPolicy.branch == branch)
+    branch = selected_branch_arg()
+    app_q = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id, selected_branch=branch)
+    lead_q = scope_by_branch(LapsedPolicy.query, LapsedPolicy, agent_col=LapsedPolicy.assigned_agent_id, selected_branch=branch)
 
     qa_statuses = ['Signed', 'QA Review', 'QA Pending', 'Application Started', 'Signing Link Sent', 'Signing Link Prepared']
     qa_apps = app_q.filter(ClientApplication.status.in_(qa_statuses)).order_by(ClientApplication.updated_at.desc()).limit(50).all()
     signed_apps = app_q.filter(ClientApplication.signed_at.isnot(None), ClientApplication.status.notin_(['Compliance Approved', 'Compliance Rejected', 'QA Rejected'])).order_by(ClientApplication.signed_at.asc()).limit(50).all()
-    fica_docs = ClientFicaDocument.query.join(ClientApplication, ClientFicaDocument.application_id == ClientApplication.id).filter(ClientFicaDocument.status == 'Received')
-    if branch:
-        fica_docs = fica_docs.filter(ClientApplication.branch == branch)
+    fica_docs = scope_by_branch(ClientFicaDocument.query.join(ClientApplication, ClientFicaDocument.application_id == ClientApplication.id), ClientApplication, branch_col=ClientApplication.branch, agent_col=ClientApplication.agent_id, selected_branch=branch).filter(ClientFicaDocument.status == 'Received')
     fica_docs = fica_docs.order_by(ClientFicaDocument.uploaded_at.asc()).limit(50).all()
     recent_reviews = ComplianceReview.query.order_by(ComplianceReview.created_at.desc()).limit(20).all()
 
@@ -81,7 +77,7 @@ def qa_dashboard():
         'approved_today': ComplianceReview.query.filter(ComplianceReview.decision.in_(['QA Approved', 'Compliance Approved']), db.func.date(ComplianceReview.created_at) == date.today()).count(),
         'rejected_today': ComplianceReview.query.filter(ComplianceReview.decision.in_(['QA Rejected', 'Compliance Rejected']), db.func.date(ComplianceReview.created_at) == date.today()).count(),
     }
-    branches = [r[0] for r in db.session.query(ClientApplication.branch).filter(ClientApplication.branch.isnot(None)).distinct().order_by(ClientApplication.branch.asc()).all() if r[0]]
+    branches = branch_choices_from_model(db, ClientApplication)
     return render_template('qa/dashboard.html', qa_apps=qa_apps, signed_apps=signed_apps, fica_docs=fica_docs, recent_reviews=recent_reviews, stats=stats, branches=branches, active_branch=branch)
 
 @qa_bp.route('/application/<int:app_id>', methods=['GET', 'POST'])
@@ -91,6 +87,7 @@ def review_application(app_id):
         flash('Only managers/compliance users can access QA.', 'danger')
         return redirect(url_for('main.dashboard'))
     app = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(app, agent_attr='agent_id')
     script = _latest_script(app)
     docs, received_count = _fica_summary(app)
     reviews = ComplianceReview.query.filter_by(application_id=app.id).order_by(ComplianceReview.created_at.desc()).all()
@@ -139,6 +136,7 @@ def review_fica(doc_id, decision):
         flash('Only managers/compliance users can access FICA review.', 'danger')
         return redirect(url_for('main.dashboard'))
     doc = ClientFicaDocument.query.get_or_404(doc_id)
+    ensure_branch_access(doc.application, agent_attr='agent_id')
     doc.status = 'Reviewed' if decision == 'approve' else 'Rejected'
     db.session.add(AuditLog(user_id=current_user.id, action=f'FICA {doc.status}', entity_type='ClientFicaDocument', entity_id=str(doc.id), details=doc.original_filename or doc.document_type))
     db.session.commit()

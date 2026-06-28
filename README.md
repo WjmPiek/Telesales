@@ -149,3 +149,13 @@ Added document tracking for applications:
 - Missing-document resend by Email or WhatsApp
 
 No new database columns or tables were added in Phase 5.
+
+## Branch Access Control Update
+
+This package adds branch-level data isolation:
+- Agents can only see their assigned branch data.
+- Branch Managers/Managers/QA/Compliance can only see their assigned branch data.
+- Admin can view all branches or filter by branch.
+- Admin can assign branches from **User Approvals / User Branch Access**.
+
+Before going live, make sure every Agent and Branch Manager has a branch value that exactly matches the branch names used in imported leads and applications.

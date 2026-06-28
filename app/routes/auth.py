@@ -185,12 +185,7 @@ def admin_branch_manager_approvals():
     allowed_roles = [r for r in roles if r.name in allowed_role_names]
     for role_name in sorted(allowed_role_names - {r.name for r in allowed_roles}):
         allowed_roles.append(_ensure_role(role_name, role_name))
-    pending_role = Role.query.filter_by(name="Pending").first()
-    query = User.query
-    if pending_role:
-        users = query.filter((User.active == False) | (User.role_id == pending_role.id)).order_by(User.active.asc(), User.created_at.desc()).all()
-    else:
-        users = query.filter_by(active=False).order_by(User.created_at.desc()).all()
+    users = User.query.order_by(User.active.asc(), User.name.asc()).all()
     return render_template("auth/admin_branch_manager_approvals.html", users=users, allowed_roles=allowed_roles)
 
 
@@ -210,11 +205,16 @@ def admin_approve_branch_manager(user_id):
     if not role or role.name not in {"Branch Manager", "Agent"}:
         flash("Please select Branch Manager or Agent before approving this user.", "danger")
         return redirect(url_for("auth.admin_branch_manager_approvals"))
+    branch = (request.form.get("branch") or user.branch or "").strip()
+    if not branch and role.name in {"Branch Manager", "Agent"}:
+        flash("Please assign a branch before saving an Agent or Branch Manager.", "danger")
+        return redirect(url_for("auth.admin_branch_manager_approvals"))
     user.role = role
+    user.branch = branch
     user.active = True
     db.session.commit()
-    _audit(current_user.id, "USER_APPROVED", f"Approved user {user.email} as {role.name}")
-    flash(f"{user.name} has been approved as {role.name} and can now login/link phone.", "success")
+    _audit(current_user.id, "USER_BRANCH_ACCESS_SAVED", f"Saved user {user.email} as {role.name}; branch={branch}")
+    flash(f"{user.name} saved as {role.name} for branch {branch}.", "success")
     return redirect(url_for("auth.admin_branch_manager_approvals"))
 
 

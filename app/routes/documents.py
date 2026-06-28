@@ -9,6 +9,7 @@ from app.models import ClientApplication, ClientFicaDocument, AuditLog
 from app.services.document_status_service import document_summary, FICA_LABELS
 from app.services.email_service import send_email
 from app.services.whatsapp_service import send_whatsapp_message
+from app.services.branch_access import scope_by_branch, ensure_branch_access, selected_branch_arg, branch_choices_from_model
 
 
 documents_bp = Blueprint("documents", __name__, url_prefix="/documents")
@@ -54,11 +55,9 @@ def document_dashboard():
     if not _can_manage_documents():
         flash("Only managers/compliance users can access document tracking.", "danger")
         return redirect(url_for("main.dashboard"))
-    branch = request.args.get("branch") or ""
+    branch = selected_branch_arg()
     status_filter = request.args.get("status") or "outstanding"
-    q = ClientApplication.query
-    if branch:
-        q = q.filter(ClientApplication.branch == branch)
+    q = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id, selected_branch=branch)
     apps = q.order_by(ClientApplication.updated_at.desc()).limit(300).all()
 
     records = []
@@ -74,7 +73,7 @@ def document_dashboard():
             continue
         records.append({"app": app, "summary": summary})
 
-    branches = [r[0] for r in db.session.query(ClientApplication.branch).filter(ClientApplication.branch.isnot(None)).distinct().order_by(ClientApplication.branch.asc()).all() if r[0]]
+    branches = branch_choices_from_model(db, ClientApplication)
     stats = {
         "outstanding": sum(1 for app in apps if not document_summary(app)["complete"]),
         "missing": sum(1 for app in apps if document_summary(app)["missing"]),
@@ -91,6 +90,7 @@ def application_documents(app_id):
         flash("Only managers/compliance users can manage documents.", "danger")
         return redirect(url_for("main.dashboard"))
     app = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(app, agent_attr="agent_id")
     if request.method == "POST":
         doc_type = request.form.get("document_type")
         uploaded_file = request.files.get("file")
@@ -123,6 +123,7 @@ def download_fica(doc_id):
     if not _can_manage_documents():
         abort(403)
     doc = ClientFicaDocument.query.get_or_404(doc_id)
+    ensure_branch_access(doc.application, agent_attr="agent_id")
     path = _resolve_existing(doc.file_path)
     if not path:
         abort(404)
@@ -136,6 +137,7 @@ def resend_missing(app_id, channel):
         flash("Only managers/compliance users can resend document requests.", "danger")
         return redirect(url_for("main.dashboard"))
     app = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(app, agent_attr="agent_id")
     summary = document_summary(app)
     missing_labels = [row["label"] for row in summary["missing"]]
     if not missing_labels:

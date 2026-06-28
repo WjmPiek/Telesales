@@ -3,6 +3,7 @@ from flask import Blueprint, render_template, redirect, url_for, request
 from flask_login import login_required, current_user
 from app import db
 from app.models import ClientApplication, LapsedPolicy, RecoveryCallLog, PolicyProduct, User, TelesalesScriptSession, ClientFicaDocument, ComplianceReview
+from app.services.branch_access import scope_by_branch, selected_branch_arg, branch_choices_from_model, can_view_all_branches, user_branch
 
 main_bp = Blueprint("main", __name__)
 
@@ -11,17 +12,20 @@ main_bp = Blueprint("main", __name__)
 def dashboard():
     today = date.today()
     open_statuses = ["New", "Imported", "Called", "No Answer", "Callback", "Interested", "Application Started", "Signature Sent", "FICA Outstanding", "QA Review"]
+    lead_q = scope_by_branch(LapsedPolicy.query, LapsedPolicy, agent_col=LapsedPolicy.assigned_agent_id)
+    app_q = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id)
+    call_q = RecoveryCallLog.query.filter(RecoveryCallLog.agent_id == current_user.id)
     stats = {
-        "applications": ClientApplication.query.count(),
+        "applications": app_q.count(),
         "products": PolicyProduct.query.count(),
-        "lapsed": LapsedPolicy.query.count(),
-        "calls": RecoveryCallLog.query.count(),
-        "calls_today": RecoveryCallLog.query.filter(RecoveryCallLog.agent_id == current_user.id, RecoveryCallLog.created_at >= today).count(),
-        "callbacks_today": LapsedPolicy.query.filter(LapsedPolicy.recovery_status == "Callback", LapsedPolicy.next_action_date == today).count(),
-        "callbacks_overdue": LapsedPolicy.query.filter(LapsedPolicy.recovery_status == "Callback", LapsedPolicy.next_action_date < today).count(),
-        "due_now": LapsedPolicy.query.filter(LapsedPolicy.recovery_status.in_(open_statuses), LapsedPolicy.next_action_date <= today).count(),
-        "interested": LapsedPolicy.query.filter(LapsedPolicy.recovery_status == "Interested").count(),
-        "applications_started": LapsedPolicy.query.filter(LapsedPolicy.recovery_status == "Application Started").count(),
+        "lapsed": lead_q.count(),
+        "calls": call_q.count(),
+        "calls_today": call_q.filter(RecoveryCallLog.created_at >= today).count(),
+        "callbacks_today": lead_q.filter(LapsedPolicy.recovery_status == "Callback", LapsedPolicy.next_action_date == today).count(),
+        "callbacks_overdue": lead_q.filter(LapsedPolicy.recovery_status == "Callback", LapsedPolicy.next_action_date < today).count(),
+        "due_now": lead_q.filter(LapsedPolicy.recovery_status.in_(open_statuses), LapsedPolicy.next_action_date <= today).count(),
+        "interested": lead_q.filter(LapsedPolicy.recovery_status == "Interested").count(),
+        "applications_started": lead_q.filter(LapsedPolicy.recovery_status == "Application Started").count(),
     }
     todays_calls = RecoveryCallLog.query.filter(RecoveryCallLog.agent_id == current_user.id, RecoveryCallLog.created_at >= today).order_by(RecoveryCallLog.created_at.desc()).limit(10).all()
     return render_template("dashboard/index.html", stats=stats, todays_calls=todays_calls)
@@ -56,19 +60,13 @@ def manager_dashboard():
         return redirect(url_for("main.dashboard"))
 
     start, end = _today_bounds()
-    branch = request.args.get("branch") or ""
+    branch = selected_branch_arg()
 
-    lead_query = LapsedPolicy.query
-    app_query = ClientApplication.query
+    lead_query = scope_by_branch(LapsedPolicy.query, LapsedPolicy, agent_col=LapsedPolicy.assigned_agent_id, selected_branch=branch)
+    app_query = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id, selected_branch=branch)
     call_query = RecoveryCallLog.query
-    script_query = TelesalesScriptSession.query
-    fica_query = ClientFicaDocument.query.join(ClientApplication, ClientFicaDocument.application_id == ClientApplication.id)
-
-    if branch:
-        lead_query = lead_query.filter(LapsedPolicy.branch == branch)
-        app_query = app_query.filter(ClientApplication.branch == branch)
-        script_query = script_query.filter(TelesalesScriptSession.branch == branch)
-        fica_query = fica_query.filter(ClientApplication.branch == branch)
+    script_query = scope_by_branch(TelesalesScriptSession.query, TelesalesScriptSession, agent_col=TelesalesScriptSession.agent_id, selected_branch=branch)
+    fica_query = scope_by_branch(ClientFicaDocument.query.join(ClientApplication, ClientFicaDocument.application_id == ClientApplication.id), ClientApplication, branch_col=ClientApplication.branch, agent_col=ClientApplication.agent_id, selected_branch=branch)
 
     open_statuses = ["New", "Imported", "Called", "No Answer", "Callback", "Interested", "Application Started", "Signature Sent", "FICA Outstanding", "QA Review"]
     pending_signature_statuses = ["Draft", "Pending Signature", "Signature Sent"]
@@ -97,8 +95,10 @@ def manager_dashboard():
         db.func.sum(db.case((RecoveryCallLog.outcome.in_(["Wants Reinstatement", "Wants New Policy", "Application Started", "Signature Sent"]), 1), else_=0)).label("sales_actions"),
         db.func.sum(db.case((RecoveryCallLog.outcome.in_(["No Answer", "Voicemail"]), 1), else_=0)).label("no_answers"),
     ).outerjoin(RecoveryCallLog, db.and_(RecoveryCallLog.agent_id == User.id, RecoveryCallLog.created_at >= start, RecoveryCallLog.created_at <= end))
-    if branch:
+    if can_view_all_branches() and branch:
         agent_rows = agent_rows.filter(User.branch == branch)
+    elif not can_view_all_branches() and user_branch():
+        agent_rows = agent_rows.filter(User.branch == user_branch())
     agent_rows = agent_rows.group_by(User.id, User.name, User.branch).order_by(db.desc("calls"), User.name.asc()).all()
 
     agents = []
@@ -119,6 +119,6 @@ def manager_dashboard():
         "recent_reviews": ComplianceReview.query.order_by(ComplianceReview.created_at.desc()).limit(5).all(),
     }
 
-    branches = [r[0] for r in db.session.query(LapsedPolicy.branch).filter(LapsedPolicy.branch.isnot(None)).distinct().order_by(LapsedPolicy.branch.asc()).all() if r[0]]
+    branches = branch_choices_from_model(db, LapsedPolicy)
 
     return render_template("dashboard/manager.html", stats=stats, agents=agents, status_counts=status_counts, pending_work=pending_work, branches=branches, active_branch=branch)

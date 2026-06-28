@@ -12,6 +12,7 @@ from app.services.whatsapp_service import send_whatsapp_message
 from app.services.pdf_service import generate_application_pdf, generate_welcome_pack, generate_popia_pdf, generate_disclosure_pdf, generate_fica_pdf
 from app.services.compliance_service import only_digits, format_dob, dob_from_sa_id, is_valid_sa_id, validate_age_limit, classify_product_template, assert_application_rules
 from app.services.document_status_service import document_summary
+from app.services.branch_access import scope_by_branch, ensure_branch_access
 
 applications_bp = Blueprint("applications", __name__, url_prefix="/applications")
 
@@ -33,7 +34,7 @@ def _is_admin():
 @login_required
 @permission_required("applications.view")
 def list_applications():
-    apps = ClientApplication.query.order_by(ClientApplication.created_at.desc()).limit(200).all()
+    apps = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id).order_by(ClientApplication.created_at.desc()).limit(200).all()
     return render_template("applications/list.html", apps=apps)
 
 @applications_bp.route("/new", methods=["GET", "POST"])
@@ -207,6 +208,7 @@ def new_application():
 @permission_required("applications.view")
 def view_application(app_id):
     a = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(a, agent_attr="agent_id")
     return render_template("applications/view.html", app=a, document_summary=document_summary(a))
 
 
@@ -227,6 +229,7 @@ def _block_signing_message(errors):
 @permission_required("applications.send_signing")
 def send_sign_link(app_id):
     a = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(a, agent_attr="agent_id")
     ok, errors = assert_application_rules(a)
     if not ok:
         _block_signing_message(errors)
@@ -272,6 +275,7 @@ def send_sign_link(app_id):
 @permission_required("applications.send_signing")
 def send_sign_whatsapp(app_id):
     app_obj = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(app_obj, agent_attr="agent_id")
     ok, errors = assert_application_rules(app_obj)
     if not ok:
         _block_signing_message(errors)
@@ -336,6 +340,7 @@ def delete_application(app_id):
 @permission_required("applications.view")
 def download_document(app_id, doc_type):
     app_obj = ClientApplication.query.get_or_404(app_id)
+    ensure_branch_access(app_obj, agent_attr="agent_id")
 
     upload_folder = os.path.abspath(current_app.config["UPLOAD_FOLDER"])
     os.makedirs(upload_folder, exist_ok=True)

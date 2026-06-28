@@ -13,6 +13,7 @@ from app.services.pdf_service import generate_telesales_script_pdf, generate_app
 from app.services.email_service import send_email
 from app.services.whatsapp_service import send_whatsapp_message
 from app.services.compliance_service import dob_from_sa_id, age_from_dob, classify_product_template, assert_application_rules
+from app.services.branch_access import scope_by_branch, ensure_branch_access
 
 recovery_bp = Blueprint("recovery", __name__, url_prefix="/recovery")
 
@@ -55,7 +56,11 @@ CALLBACK_OUTCOMES = {"No Answer", "Voicemail", "Callback Requested"}
 
 
 def open_recovery_query():
-    return LapsedPolicy.query.filter(LapsedPolicy.recovery_status.notin_(LEAD_CLOSED_STATUSES))
+    return scope_by_branch(
+        LapsedPolicy.query.filter(LapsedPolicy.recovery_status.notin_(LEAD_CLOSED_STATUSES)),
+        LapsedPolicy,
+        agent_col=LapsedPolicy.assigned_agent_id,
+    )
 
 
 @recovery_bp.route("/")
@@ -73,7 +78,7 @@ def queue():
 
     status_counts = {
         row[0] or "New": row[1]
-        for row in db.session.query(LapsedPolicy.recovery_status, db.func.count(LapsedPolicy.id))
+        for row in open_recovery_query().with_entities(LapsedPolicy.recovery_status, db.func.count(LapsedPolicy.id))
         .group_by(LapsedPolicy.recovery_status).all()
     }
     return render_template(
@@ -135,6 +140,7 @@ def callbacks():
 def client_timeline(policy_id):
     """Phase 2 single client timeline built from existing call, script, application, signature and FICA records."""
     p = LapsedPolicy.query.get_or_404(policy_id)
+    ensure_branch_access(p, agent_attr="assigned_agent_id")
     calls = RecoveryCallLog.query.filter_by(lapsed_policy_id=p.id).order_by(RecoveryCallLog.created_at.desc()).all()
     applications = ClientApplication.query.filter_by(lapsed_policy_id=p.id).order_by(ClientApplication.created_at.desc()).all()
     sessions = TelesalesScriptSession.query.filter_by(lapsed_policy_id=p.id).order_by(TelesalesScriptSession.created_at.desc()).all()
@@ -215,6 +221,7 @@ def import_lapsed():
 @permission_required("recovery.call")
 def log_call(policy_id):
     p = LapsedPolicy.query.get_or_404(policy_id)
+    ensure_branch_access(p, agent_attr="assigned_agent_id")
     outcomes = CALL_OUTCOMES
     previous_calls = RecoveryCallLog.query.filter_by(lapsed_policy_id=p.id).order_by(RecoveryCallLog.created_at.desc()).limit(10).all()
     if request.method == "POST":
@@ -906,6 +913,7 @@ def _script_score(answers):
 @permission_required("recovery.call")
 def start_script(policy_id):
     p = LapsedPolicy.query.get_or_404(policy_id)
+    ensure_branch_access(p, agent_attr="assigned_agent_id")
     app_type = request.args.get("app_type", "new")
     client_name = f"{p.initials or ''} {p.surname or ''}".strip()
     session = TelesalesScriptSession(
@@ -931,6 +939,7 @@ def start_script(policy_id):
 @permission_required("recovery.call")
 def script_step(session_id):
     session = TelesalesScriptSession.query.get_or_404(session_id)
+    ensure_branch_access(session, agent_attr="agent_id")
     if session.agent_id != current_user.id and not _can_manage_scripts():
         abort(403)
     step = _script_step(session.current_step)
@@ -1038,6 +1047,7 @@ def _save_script_pdf(session):
 @permission_required("recovery.call")
 def script_complete(session_id):
     session = TelesalesScriptSession.query.get_or_404(session_id)
+    ensure_branch_access(session, agent_attr="agent_id")
     if session.agent_id != current_user.id and not _can_manage_scripts():
         abort(403)
     answers = _script_answers(session)
@@ -1053,6 +1063,7 @@ def download_script_pdf(session_id):
     if not _can_manage_scripts():
         abort(403)
     session = TelesalesScriptSession.query.get_or_404(session_id)
+    ensure_branch_access(session, agent_attr="agent_id")
     if not session.pdf_path or not os.path.exists(session.pdf_path):
         _save_script_pdf(session)
     return send_file(session.pdf_path, as_attachment=False)
@@ -1064,7 +1075,7 @@ def download_script_pdf(session_id):
 def script_records():
     if not _can_manage_scripts():
         abort(403)
-    sessions = TelesalesScriptSession.query.order_by(TelesalesScriptSession.created_at.desc()).limit(300).all()
+    sessions = scope_by_branch(TelesalesScriptSession.query, TelesalesScriptSession, agent_col=TelesalesScriptSession.agent_id).order_by(TelesalesScriptSession.created_at.desc()).limit(300).all()
     return render_template("recovery/script_records.html", sessions=sessions)
 
 
@@ -1100,9 +1111,12 @@ def reset_script_questions():
 @permission_required("applications.create")
 def start_application(policy_id):
     p = LapsedPolicy.query.get_or_404(policy_id)
+    ensure_branch_access(p, agent_attr="assigned_agent_id")
     app_type = request.args.get("app_type", "reinstatement")
     script_id = request.args.get("script_id") or request.form.get("script_id")
     script_session = TelesalesScriptSession.query.get(script_id) if script_id else None
+    if script_session:
+        ensure_branch_access(script_session, agent_attr="agent_id")
     products = _eligible_products_for_script(script_session) if script_session else PolicyProduct.query.filter_by(active=True).order_by(PolicyProduct.product_name, PolicyProduct.plan_name).all()
     selected_product = _selected_script_product(script_session) if script_session else None
     selected_payment = _answer_value(script_session, "payment_method") if script_session else ""
@@ -1170,6 +1184,8 @@ def start_application(policy_id):
         )
         if script_id:
             script_session = TelesalesScriptSession.query.get(script_id)
+            if script_session:
+                ensure_branch_access(script_session, agent_attr="agent_id")
             if script_session:
                 script_session.application = a
                 script_session.client_email = email
