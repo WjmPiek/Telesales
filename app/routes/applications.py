@@ -11,6 +11,7 @@ from app.services.email_service import send_email
 from app.services.whatsapp_service import send_whatsapp_message
 from app.services.pdf_service import generate_application_pdf, generate_welcome_pack, generate_popia_pdf, generate_disclosure_pdf, generate_fica_pdf
 from app.services.compliance_service import only_digits, format_dob, dob_from_sa_id, is_valid_sa_id, validate_age_limit, classify_product_template, assert_application_rules
+from app.services.document_status_service import document_summary
 
 applications_bp = Blueprint("applications", __name__, url_prefix="/applications")
 
@@ -206,7 +207,7 @@ def new_application():
 @permission_required("applications.view")
 def view_application(app_id):
     a = ClientApplication.query.get_or_404(app_id)
-    return render_template("applications/view.html", app=a)
+    return render_template("applications/view.html", app=a, document_summary=document_summary(a))
 
 
 def _client_salutation(app_obj):

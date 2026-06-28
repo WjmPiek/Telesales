@@ -498,6 +498,23 @@ class AuditLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+
+class ComplianceReview(db.Model):
+    __tablename__ = "compliance_reviews"
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("client_applications.id"), nullable=False, index=True)
+    lapsed_policy_id = db.Column(db.Integer, db.ForeignKey("lapsed_policies.id"), index=True)
+    reviewer_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    decision = db.Column(db.String(40), nullable=False)
+    checklist_json = db.Column(db.Text, default="{}")
+    score = db.Column(db.Integer, default=0)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    application = db.relationship("ClientApplication", backref=db.backref("compliance_reviews", lazy=True, order_by="ComplianceReview.created_at.desc()"))
+    lapsed_policy = db.relationship("LapsedPolicy", backref=db.backref("compliance_reviews", lazy=True, order_by="ComplianceReview.created_at.desc()"))
+    reviewer = db.relationship("User")
+
 class QRTrustedDevice(db.Model):
     __tablename__ = "qr_trusted_devices"
     id = db.Column(db.Integer, primary_key=True)
@@ -563,3 +580,35 @@ class TelesalesScriptSession(db.Model):
     lapsed_policy = db.relationship("LapsedPolicy")
     application = db.relationship("ClientApplication")
     agent = db.relationship("User")
+
+class SystemSetting(db.Model):
+    __tablename__ = "system_settings"
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(80), nullable=False, index=True)
+    key = db.Column(db.String(120), nullable=False, index=True)
+    value = db.Column(db.Text, default="")
+    description = db.Column(db.Text)
+    active = db.Column(db.Boolean, default=True)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = db.relationship("User")
+    __table_args__ = (db.UniqueConstraint('category', 'key', name='uq_system_setting_category_key'),)
+
+class LoginAttempt(db.Model):
+    __tablename__ = "login_attempts"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), index=True)
+    ip_address = db.Column(db.String(80), index=True)
+    success = db.Column(db.Boolean, default=False)
+    reason = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+class CallSummary(db.Model):
+    __tablename__ = "call_summaries"
+    id = db.Column(db.Integer, primary_key=True)
+    call_log_id = db.Column(db.Integer, db.ForeignKey("recovery_call_logs.id"), nullable=False, index=True)
+    summary = db.Column(db.Text)
+    next_best_action = db.Column(db.String(255))
+    risk_flags = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    call_log = db.relationship("RecoveryCallLog")

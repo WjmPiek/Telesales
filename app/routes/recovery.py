@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 from openpyxl import load_workbook
 from app import db
-from app.models import LapsedPolicy, RecoveryCallLog, ClientApplication, PolicyProduct, TelesalesScriptSession
+from app.models import LapsedPolicy, RecoveryCallLog, ClientApplication, PolicyProduct, TelesalesScriptSession, ApplicationSignature, ClientFicaDocument
 from app.security import permission_required
 from app.services.pdf_service import generate_telesales_script_pdf, generate_application_pdf, generate_popia_pdf, generate_disclosure_pdf, generate_fica_pdf
 from app.services.email_service import send_email
@@ -16,15 +16,169 @@ from app.services.compliance_service import dob_from_sa_id, age_from_dob, classi
 
 recovery_bp = Blueprint("recovery", __name__, url_prefix="/recovery")
 
-CARRY = {"No Answer", "Voicemail", "Answered - Needs Follow-up"}
+LEAD_OPEN_STATUSES = [
+    "New",
+    "Imported",
+    "Called",
+    "No Answer",
+    "Callback",
+    "Interested",
+    "Application Started",
+    "Signature Sent",
+    "FICA Outstanding",
+    "QA Review",
+]
+LEAD_CLOSED_STATUSES = ["Approved", "Rejected", "Closed", "Reinstated"]
+
+OUTCOME_TO_STATUS = {
+    "No Answer": "No Answer",
+    "Voicemail": "No Answer",
+    "Wrong Number": "Closed",
+    "Number Invalid": "Closed",
+    "Not Interested": "Closed",
+    "Callback Requested": "Callback",
+    "Interested": "Interested",
+    "Application Started": "Application Started",
+    "Signature Sent": "Signature Sent",
+    "FICA Outstanding": "FICA Outstanding",
+    "QA Review": "QA Review",
+    "Approved": "Approved",
+    "Rejected": "Rejected",
+    "Dispute / Complaint": "QA Review",
+    "Reinstated": "Reinstated",
+    "Wants Reinstatement": "Application Started",
+    "Wants New Policy": "Application Started",
+}
+
+CALL_OUTCOMES = list(OUTCOME_TO_STATUS.keys())
+CALLBACK_OUTCOMES = {"No Answer", "Voicemail", "Callback Requested"}
+
+
+def open_recovery_query():
+    return LapsedPolicy.query.filter(LapsedPolicy.recovery_status.notin_(LEAD_CLOSED_STATUSES))
 
 
 @recovery_bp.route("/")
 @login_required
 @permission_required("recovery.view")
 def queue():
-    q = LapsedPolicy.query.filter(LapsedPolicy.recovery_status.notin_(["Closed", "Reinstated", "Application Started"])).order_by(LapsedPolicy.next_action_date.asc()).limit(200).all()
-    return render_template("recovery/queue.html", policies=q)
+    status = request.args.get("status")
+    query = open_recovery_query()
+    if status:
+        query = query.filter(LapsedPolicy.recovery_status == status)
+    policies = query.order_by(
+        LapsedPolicy.next_action_date.asc().nullslast(),
+        LapsedPolicy.imported_at.asc()
+    ).limit(200).all()
+
+    status_counts = {
+        row[0] or "New": row[1]
+        for row in db.session.query(LapsedPolicy.recovery_status, db.func.count(LapsedPolicy.id))
+        .group_by(LapsedPolicy.recovery_status).all()
+    }
+    return render_template(
+        "recovery/queue.html",
+        policies=policies,
+        status_counts=status_counts,
+        open_statuses=LEAD_OPEN_STATUSES,
+        active_status=status,
+        today=date.today(),
+    )
+
+
+@recovery_bp.route("/next")
+@login_required
+@permission_required("recovery.call")
+def next_client():
+    policy = open_recovery_query().filter(
+        (LapsedPolicy.assigned_agent_id == current_user.id) | (LapsedPolicy.assigned_agent_id.is_(None)),
+        (LapsedPolicy.next_action_date.is_(None)) | (LapsedPolicy.next_action_date <= date.today())
+    ).order_by(
+        LapsedPolicy.next_action_date.asc().nullslast(),
+        LapsedPolicy.imported_at.asc()
+    ).first()
+    if not policy:
+        flash("No clients are due for calling right now.", "info")
+        return redirect(url_for("recovery.queue"))
+    if not policy.assigned_agent_id:
+        policy.assigned_agent_id = current_user.id
+        db.session.commit()
+    return redirect(url_for("recovery.log_call", policy_id=policy.id))
+
+
+
+
+@recovery_bp.route("/callbacks")
+@login_required
+@permission_required("recovery.view")
+def callbacks():
+    """Phase 2 callback worklist: overdue, today, upcoming and unscheduled follow-ups."""
+    today = date.today()
+    base = open_recovery_query().filter(LapsedPolicy.recovery_status == "Callback")
+    overdue = base.filter(LapsedPolicy.next_action_date < today).order_by(LapsedPolicy.next_action_date.asc()).all()
+    due_today = base.filter(LapsedPolicy.next_action_date == today).order_by(LapsedPolicy.imported_at.asc()).all()
+    upcoming = base.filter(LapsedPolicy.next_action_date > today).order_by(LapsedPolicy.next_action_date.asc()).limit(200).all()
+    unscheduled = base.filter(LapsedPolicy.next_action_date.is_(None)).order_by(LapsedPolicy.imported_at.asc()).limit(200).all()
+    return render_template(
+        "recovery/callbacks.html",
+        overdue=overdue,
+        due_today=due_today,
+        upcoming=upcoming,
+        unscheduled=unscheduled,
+        today=today,
+    )
+
+
+@recovery_bp.route("/<int:policy_id>/timeline")
+@login_required
+@permission_required("recovery.view")
+def client_timeline(policy_id):
+    """Phase 2 single client timeline built from existing call, script, application, signature and FICA records."""
+    p = LapsedPolicy.query.get_or_404(policy_id)
+    calls = RecoveryCallLog.query.filter_by(lapsed_policy_id=p.id).order_by(RecoveryCallLog.created_at.desc()).all()
+    applications = ClientApplication.query.filter_by(lapsed_policy_id=p.id).order_by(ClientApplication.created_at.desc()).all()
+    sessions = TelesalesScriptSession.query.filter_by(lapsed_policy_id=p.id).order_by(TelesalesScriptSession.created_at.desc()).all()
+    app_ids = [a.id for a in applications]
+    signatures = ApplicationSignature.query.filter(ApplicationSignature.application_id.in_(app_ids)).order_by(ApplicationSignature.signed_at.desc()).all() if app_ids else []
+    fica_docs = ClientFicaDocument.query.filter(ClientFicaDocument.application_id.in_(app_ids)).order_by(ClientFicaDocument.uploaded_at.desc()).all() if app_ids else []
+
+    events = []
+    if p.imported_at:
+        events.append({"when": p.imported_at, "type": "Lead Imported", "title": f"Policy {p.policy_number} imported", "details": p.comments or ""})
+    if p.next_action_date:
+        events.append({"when": datetime.combine(p.next_action_date, datetime.min.time()), "type": "Next Action", "title": f"Next action due: {p.next_action_date}", "details": f"Current status: {p.recovery_status}"})
+
+    for call in calls:
+        details = call.notes or ""
+        if call.next_action_date:
+            details = (details + "\n" if details else "") + f"Next action: {call.next_action_date}"
+        events.append({"when": call.created_at, "type": "Call", "title": call.outcome, "details": details, "agent": call.agent.name if call.agent else ""})
+
+    for session in sessions:
+        title = f"Script {session.status}"
+        if session.qa_score is not None:
+            title += f" - QA {session.qa_score}%"
+        events.append({"when": session.completed_at or session.created_at, "type": "Script", "title": title, "details": session.blocked_reason or session.qa_result or "", "agent": session.agent.name if session.agent else ""})
+
+    for app in applications:
+        events.append({"when": app.created_at, "type": "Application", "title": f"Application {app.application_ref} created", "details": f"Status: {app.status}; Type: {app.application_type}; Premium: {app.monthly_premium}"})
+        if app.updated_at and app.updated_at != app.created_at:
+            events.append({"when": app.updated_at, "type": "Application Updated", "title": f"Application {app.application_ref} updated", "details": f"Status: {app.status}"})
+        if app.signed_at:
+            events.append({"when": app.signed_at, "type": "Signature", "title": f"Application {app.application_ref} signed", "details": app.signed_pdf_path or "Signed PDF generated"})
+        if app.sign_token_created_at:
+            events.append({"when": app.sign_token_created_at, "type": "Signing Link", "title": f"Signing link created for {app.application_ref}", "details": "Used" if app.sign_token_used_at else "Awaiting client signature"})
+        if app.sign_token_used_at:
+            events.append({"when": app.sign_token_used_at, "type": "Signing Link Used", "title": f"Signing link used for {app.application_ref}", "details": "Client opened/completed signing link"})
+
+    for sig in signatures:
+        events.append({"when": sig.signed_at, "type": "Client Signature", "title": sig.typed_name or "Client signed", "details": f"POPIA: {'Yes' if sig.consent_popia else 'No'}; Disclosure: {'Yes' if sig.consent_disclosure else 'No'}; OTP: {'Verified' if sig.otp_verified else 'Not verified'}"})
+
+    for doc in fica_docs:
+        events.append({"when": doc.uploaded_at, "type": "FICA Document", "title": doc.document_type.replace('_', ' ').title(), "details": f"{doc.status}: {doc.original_filename}"})
+
+    events = sorted(events, key=lambda e: e["when"] or datetime.min, reverse=True)
+    return render_template("recovery/timeline.html", p=p, calls=calls, applications=applications, sessions=sessions, signatures=signatures, fica_docs=fica_docs, events=events)
 
 
 @recovery_bp.route("/import", methods=["POST"])
@@ -61,50 +215,39 @@ def import_lapsed():
 @permission_required("recovery.call")
 def log_call(policy_id):
     p = LapsedPolicy.query.get_or_404(policy_id)
-    outcomes = [
-        "Answered - Will Pay",
-        "Wants Reinstatement",
-        "Wants New Policy",
-        "Answered - Needs Follow-up",
-        "Answered - Not Interested",
-        "Answered - Wrong Number",
-        "No Answer",
-        "Voicemail",
-        "Number Invalid",
-        "Deceased",
-        "Dispute / Complaint",
-        "Reinstated"
-    ]
+    outcomes = CALL_OUTCOMES
+    previous_calls = RecoveryCallLog.query.filter_by(lapsed_policy_id=p.id).order_by(RecoveryCallLog.created_at.desc()).limit(10).all()
     if request.method == "POST":
         outcome = request.form["outcome"]
         follow = request.form.get("follow_up_date") or None
-        next_action = date.today() + timedelta(days=1) if outcome in CARRY else None
-        if follow:
-            next_action = date.fromisoformat(follow)
+        notes = (request.form.get("notes") or "").strip()
+
+        if outcome in CALLBACK_OUTCOMES and not follow:
+            follow = (date.today() + timedelta(days=1)).isoformat()
+
+        next_action = date.fromisoformat(follow) if follow else None
+        if outcome in {"Interested", "Application Started", "Signature Sent", "FICA Outstanding", "QA Review"} and not next_action:
+            next_action = date.today()
 
         log = RecoveryCallLog(
             lapsed_policy_id=p.id,
             agent_id=current_user.id,
             outcome=outcome,
-            notes=request.form.get("notes"),
+            notes=notes,
             follow_up_date=follow,
             next_action_date=next_action
         )
 
-        if outcome == "Reinstated":
-            p.recovery_status = "Reinstated"
-        elif outcome in ["Wants Reinstatement", "Wants New Policy"]:
-            p.recovery_status = "Application Requested"
+        p.recovery_status = OUTCOME_TO_STATUS.get(outcome, "Called")
+        p.assigned_agent_id = current_user.id
+
+        if outcome in ["Wants Reinstatement", "Wants New Policy"]:
             p.next_action_date = date.today()
             db.session.add(log)
             db.session.commit()
             app_type = "reinstatement" if outcome == "Wants Reinstatement" else "new"
             flash("Call logged. Start the full application process below. No joining fee will apply.", "success")
             return redirect(url_for("recovery.start_script", policy_id=p.id, app_type=app_type))
-        elif outcome in ["Answered - Not Interested", "Answered - Wrong Number", "Number Invalid", "Deceased"]:
-            p.recovery_status = "Closed"
-        else:
-            p.recovery_status = outcome
 
         p.next_action_date = next_action
         db.session.add(log)
@@ -112,7 +255,7 @@ def log_call(policy_id):
         flash("Call logged", "success")
         return redirect(url_for("recovery.queue"))
 
-    return render_template("recovery/log_call.html", p=p, outcomes=outcomes)
+    return render_template("recovery/log_call.html", p=p, outcomes=outcomes, previous_calls=previous_calls)
 
 
 

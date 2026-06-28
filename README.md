@@ -67,3 +67,85 @@ Terms template selection:
 - Member + Product applications: `member_product_terms.svg` -> `member_product_terms.pdf`
 
 The PDF overlay engine scales legacy field coordinates to A4 so values stay aligned next to headings on the new SVG-derived templates.
+
+## Phase 1 telesales workflow
+
+This build adds the first proper call-centre workflow layer:
+
+- Agent dashboard with a **Next Client** button.
+- Due-now queue for clients that must be called today.
+- Callback tracking through `next_action_date`.
+- Required call outcomes.
+- Lead status pipeline using `lapsed_policies.recovery_status`.
+- Call notes/history from `recovery_call_logs`.
+
+Phase 1 uses existing database columns only. No database migration is required for these changes.
+
+Pipeline statuses used in Phase 1:
+
+```text
+New
+Imported
+Called
+No Answer
+Callback
+Interested
+Application Started
+Signature Sent
+FICA Outstanding
+QA Review
+Approved
+Rejected
+Closed
+Reinstated
+```
+
+
+## Phase 2 - Callback + Client Timeline
+
+Added on top of Phase 1:
+
+- Callback Worklist at `/recovery/callbacks`
+- Overdue, today, upcoming and unscheduled callback sections
+- Client Timeline page for every lead
+- Timeline records call logs, script sessions, applications, signing links, signatures and FICA uploads
+- Callback link added to the top navigation
+- Agent dashboard callback card now opens the callback worklist and shows overdue count
+
+No new database columns were added in Phase 2. Existing tables are used so the Render PostgreSQL deployment remains safer.
+
+
+## Phase 3 - Manager Dashboard
+
+Added manager reporting and worklist screens without adding database columns.
+
+- `/manager` Manager Dashboard
+- Agent performance today
+- Calls, open leads, callbacks, conversion and pending-work metrics
+- Branch filter
+- Lead status breakdown
+- Pending callbacks, pending signatures, FICA review and QA pending panels
+
+Only Admin, Manager and Branch Manager roles see the Manager link.
+
+
+## Phase 4 - QA / Compliance
+
+Adds QA/compliance dashboard, application review checklist, approval/rejection decisions, FICA document review, review history, and audit logging. See `PHASE4_NOTES.txt`.
+
+
+## Phase 5 - Document Tracking
+
+Added document tracking for applications:
+
+- Document dashboard at `/documents`
+- Application document status panel
+- Required signature document tracking
+- Required FICA document tracking
+- Missing/rejected document filters
+- Pending review filter
+- Completion percentage per application
+- Staff FICA upload
+- Missing-document resend by Email or WhatsApp
+
+No new database columns or tables were added in Phase 5.

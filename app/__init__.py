@@ -72,6 +72,12 @@ def create_app():
     from app.routes.signing import signing_bp
     from app.routes.policies import policies_bp
     from app.routes.recovery import recovery_bp
+    from app.routes.qa import qa_bp
+    from app.routes.documents import documents_bp
+    from app.routes.advanced import advanced_bp
+    from app.routes.security_center import security_center_bp
+    from app.routes.settings import settings_bp
+    from app.routes.reports import reports_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -79,5 +85,11 @@ def create_app():
     app.register_blueprint(signing_bp)
     app.register_blueprint(policies_bp)
     app.register_blueprint(recovery_bp)
+    app.register_blueprint(qa_bp)
+    app.register_blueprint(documents_bp)
+    app.register_blueprint(advanced_bp)
+    app.register_blueprint(security_center_bp)
+    app.register_blueprint(settings_bp)
+    app.register_blueprint(reports_bp)
 
     return app

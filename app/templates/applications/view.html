@@ -29,6 +29,31 @@
     <div class="alert alert-success">Application signed. Welcome pack generated and sent if email was available.</div>
     {% endif %}
   
+
+    <hr>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h5 class="mb-0">Document Tracking</h5>
+      <a class="btn btn-outline-secondary btn-sm" href="{{url_for('documents.application_documents', app_id=app.id)}}">Open Full Document Panel</a>
+    </div>
+    <div class="progress mb-2" style="height:18px"><div class="progress-bar" style="width: {{document_summary.completion_percent}}%">{{document_summary.completion_percent}}%</div></div>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead><tr><th>Document</th><th>Status</th><th>Date</th></tr></thead>
+        <tbody>
+        {% for row in document_summary.rows %}
+          <tr>
+            <td>{{row.label}}</td>
+            <td><span class="badge text-bg-{{row.badge}}">{{row.status}}</span></td>
+            <td>{{row.signed_at or row.uploaded_at or ''}}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if document_summary.missing %}
+      <div class="alert alert-warning py-2"><b>Missing:</b> {% for row in document_summary.missing %}{{row.label}}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+    {% endif %}
+
     <hr>
     <h5>Stored Documents</h5>
     <div class="mb-2">
