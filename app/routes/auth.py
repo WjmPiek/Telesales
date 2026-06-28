@@ -56,7 +56,7 @@ def _is_admin_user(user):
 def _admin_required():
     if not current_user.is_authenticated or not _is_admin_user(current_user):
         flash("Admin access required.", "danger")
-        return redirect(url_for("main.dashboard"))
+        return redirect(url_for("role_portals.home"))
     return None
 
 def _device_type(user_agent):

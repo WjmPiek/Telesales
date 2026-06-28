@@ -78,6 +78,11 @@ def create_app():
     from app.routes.security_center import security_center_bp
     from app.routes.settings import settings_bp
     from app.routes.reports import reports_bp
+    from app.routes.role_portals import role_portals_bp
+    from app.routes.allocation import allocation_bp
+    from app.routes.wallboard import wallboard_bp
+    from app.routes.targets import targets_bp
+    from app.routes.analytics import analytics_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -91,5 +96,10 @@ def create_app():
     app.register_blueprint(security_center_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(reports_bp)
+    app.register_blueprint(role_portals_bp)
+    app.register_blueprint(allocation_bp)
+    app.register_blueprint(wallboard_bp)
+    app.register_blueprint(targets_bp)
+    app.register_blueprint(analytics_bp)
 
     return app

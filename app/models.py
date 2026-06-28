@@ -612,3 +612,66 @@ class CallSummary(db.Model):
     risk_flags = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     call_log = db.relationship("RecoveryCallLog")
+
+class LeadDistributionRule(db.Model):
+    __tablename__ = "lead_distribution_rules"
+    id = db.Column(db.Integer, primary_key=True)
+    branch = db.Column(db.String(120), index=True)
+    method = db.Column(db.String(40), default="round_robin")
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class AgentTarget(db.Model):
+    __tablename__ = "agent_targets"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    target_date = db.Column(db.Date, nullable=False, default=date.today)
+    calls_target = db.Column(db.Integer, default=0)
+    sales_target = db.Column(db.Integer, default=0)
+    premium_target = db.Column(db.Numeric(12,2), default=0)
+    user = db.relationship("User")
+
+class CommissionRule(db.Model):
+    __tablename__ = "commission_rules"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    role_name = db.Column(db.String(80), default="agent")
+    flat_amount_per_sale = db.Column(db.Numeric(12,2), default=0)
+    percentage_of_premium = db.Column(db.Numeric(6,2), default=0)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class SalesTarget(db.Model):
+    __tablename__ = "sales_targets"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    branch = db.Column(db.String(120), index=True)
+    month = db.Column(db.String(7), index=True)  # YYYY-MM
+    calls_target = db.Column(db.Integer, default=0)
+    sales_target = db.Column(db.Integer, default=0)
+    premium_target = db.Column(db.Numeric(12,2), default=0)
+    user = db.relationship("User")
+
+class CallRecording(db.Model):
+    __tablename__ = "call_recordings"
+    id = db.Column(db.Integer, primary_key=True)
+    call_log_id = db.Column(db.Integer, db.ForeignKey("recovery_call_logs.id"), index=True)
+    lapsed_policy_id = db.Column(db.Integer, db.ForeignKey("lapsed_policies.id"), index=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    file_path = db.Column(db.String(500), nullable=False)
+    original_filename = db.Column(db.String(255))
+    duration_seconds = db.Column(db.Integer)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    call_log = db.relationship("RecoveryCallLog")
+    agent = db.relationship("User")
+
+class ComplianceFlag(db.Model):
+    __tablename__ = "compliance_flags"
+    id = db.Column(db.Integer, primary_key=True)
+    call_log_id = db.Column(db.Integer, db.ForeignKey("recovery_call_logs.id"), index=True)
+    severity = db.Column(db.String(30), default="medium")
+    flag_type = db.Column(db.String(120))
+    details = db.Column(db.Text)
+    resolved = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    call_log = db.relationship("RecoveryCallLog")
