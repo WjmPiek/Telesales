@@ -413,40 +413,57 @@ def _ensure_super_admin_account():
     return user
 
 def _reassign_user_history_to_super_admin(deleted_user):
-    """Before permanent delete, move FK history to Super Admin so records stay visible."""
+    """Before permanent delete, move every FK that points to users.id to Super Admin.
+
+    This uses PostgreSQL metadata instead of a hard-coded model list, so deletes do not fail
+    when a new table later adds a users.id foreign key, for example
+    lapsed_policies.assigned_agent_id.
+    """
+    from sqlalchemy import text
+
     super_user = _ensure_super_admin_account()
     if not super_user:
         raise ValueError(f"Super Admin user {SUPER_ADMIN_EMAIL} does not exist yet. Create it before deleting users.")
     if deleted_user.id == super_user.id:
         raise ValueError("Super Admin cannot be deleted.")
 
-    from app.models import (
-        PolicyChangeLog, ClientApplication, LapsedPolicy, RecoveryCallLog, AuditLog,
-        ComplianceReview, QRTrustedDevice, QRLoginToken, TelesalesScriptSession,
-        SystemSetting, AgentTarget, SalesTarget, CallRecording
-    )
+    # Flush pending changes first, then update every FK column in the public schema that
+    # references users(id). This preserves history by moving ownership/agent/reviewer
+    # references to the protected Super Admin before the user row is deleted.
+    db.session.flush()
+    fk_rows = db.session.execute(text("""
+        SELECT
+            kcu.table_schema,
+            kcu.table_name,
+            kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+          ON ccu.constraint_name = tc.constraint_name
+         AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+          AND ccu.table_schema = 'public'
+          AND ccu.table_name = 'users'
+          AND ccu.column_name = 'id'
+          AND kcu.table_schema = 'public'
+        ORDER BY kcu.table_name, kcu.column_name
+    """)).fetchall()
 
-    replacements = [
-        (PolicyChangeLog, "changed_by_id"),
-        (ClientApplication, "agent_id"),
-        (LapsedPolicy, "assigned_agent_id"),
-        (RecoveryCallLog, "agent_id"),
-        (AuditLog, "user_id"),
-        (ComplianceReview, "reviewer_id"),
-        (QRTrustedDevice, "user_id"),
-        (QRLoginToken, "approved_user_id"),
-        (TelesalesScriptSession, "agent_id"),
-        (SystemSetting, "updated_by_id"),
-        (AgentTarget, "user_id"),
-        (SalesTarget, "user_id"),
-        (CallRecording, "agent_id"),
-    ]
-    for model, field in replacements:
-        try:
-            db.session.query(model).filter(getattr(model, field) == deleted_user.id).update({field: super_user.id}, synchronize_session=False)
-        except Exception:
-            db.session.rollback()
-            raise
+    for row in fk_rows:
+        table_name = row.table_name
+        column_name = row.column_name
+        if table_name == "users":
+            continue
+        # Table/column names come from PostgreSQL metadata. Quote identifiers safely.
+        quoted_table = '"' + table_name.replace('"', '""') + '"'
+        quoted_column = '"' + column_name.replace('"', '""') + '"'
+        db.session.execute(
+            text(f"UPDATE {quoted_table} SET {quoted_column} = :super_id WHERE {quoted_column} = :old_id"),
+            {"super_id": super_user.id, "old_id": deleted_user.id},
+        )
+
     return super_user
 
 @auth_bp.route("/users/<int:user_id>/delete", methods=["POST"])
