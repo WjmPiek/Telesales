@@ -16,7 +16,8 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 QR_EXPIRY_SECONDS = 90
 TRUSTED_DEVICE_DAYS = 180
 TRUSTED_DEVICE_COOKIE = "mf_qr_trusted_device"
-ALLOWED_QR_ROLES = {"admin", "branch manager", "branch_manager", "manager", "supervisor", "agent", "user", "staff"}
+SUPER_ADMIN_EMAIL = "wjm@martinsdirect.com"
+ALLOWED_QR_ROLES = {"super admin", "super_admin", "admin", "branch manager", "branch_manager", "manager", "supervisor", "agent", "user", "staff"}
 
 
 def _client_ip():
@@ -51,7 +52,12 @@ def _role_allowed(user):
 
 def _is_admin_user(user):
     role_name = (user.role.name if getattr(user, "role", None) else "").lower().strip()
-    return role_name == "admin"
+    return role_name in {"admin", "super admin", "super_admin"}
+
+def _is_super_admin_user(user):
+    email = ((getattr(user, "email", "") or "").lower().strip())
+    role_name = (user.role.name if getattr(user, "role", None) else "").lower().strip()
+    return email == SUPER_ADMIN_EMAIL or role_name in {"super admin", "super_admin"}
 
 def _admin_required():
     if not current_user.is_authenticated or not _is_admin_user(current_user):
@@ -248,7 +254,7 @@ def _manager_or_admin_required():
     return None
 
 def _is_protected_admin(user):
-    return _role_name(user) == "admin"
+    return _role_name(user) in {"admin", "super admin"} or ((getattr(user, "email", "") or "").lower().strip() == SUPER_ADMIN_EMAIL)
 
 def _branch_choices():
     from app.models import ClientApplication, LapsedPolicy
@@ -268,7 +274,7 @@ def _can_manage_target(target):
     if not target:
         return False, "User not found."
     if _is_protected_admin(target):
-        return False, "Admin users are protected and cannot be edited or deleted."
+        return False, "Admin and Super Admin users are protected and cannot be edited or deleted."
     if _is_admin_user(current_user):
         return True, ""
     if _is_branch_manager_user(current_user):
@@ -281,7 +287,7 @@ def _can_manage_target(target):
 
 def _allowed_manage_roles():
     from app.models import Role
-    names = ["Agent"] if _is_branch_manager_user(current_user) and not _is_admin_user(current_user) else ["Branch Manager", "Agent"]
+    names = ["Agent"] if _is_branch_manager_user(current_user) and not _is_admin_user(current_user) else (["Admin", "Branch Manager", "Agent"] if _is_super_admin_user(current_user) else ["Branch Manager", "Agent"])
     roles = []
     for name in names:
         roles.append(_ensure_role(name, name))
@@ -320,7 +326,7 @@ def users_create():
     if not name or not email or not password or not role:
         flash("Please complete name, email, password and role.", "danger")
         return redirect(url_for("auth.users_manage"))
-    if role.name not in allowed_names or role.name == "Admin":
+    if role.name not in allowed_names:
         flash("You cannot create that role.", "danger")
         return redirect(url_for("auth.users_manage"))
     if len(password) < 8:
@@ -361,7 +367,7 @@ def users_update(user_id):
     from app.models import Role
     role = db.session.get(Role, role_id) if role_id else user.role
     allowed_names = {r.name for r in _allowed_manage_roles()}
-    if not role or role.name not in allowed_names or role.name == "Admin":
+    if not role or role.name not in allowed_names:
         flash("You cannot assign that role.", "danger")
         return redirect(url_for("auth.users_manage"))
     if _is_branch_manager_user(current_user) and not _is_admin_user(current_user):
@@ -387,6 +393,62 @@ def users_update(user_id):
     flash("User saved.", "success")
     return redirect(url_for("auth.users_manage"))
 
+
+
+def _ensure_super_admin_account():
+    """Make wjm@martinsdirect.com a protected Super Admin whenever that user exists."""
+    from app.models import Role
+    role = Role.query.filter_by(name="Super Admin").first()
+    if not role:
+        role = Role(name="Super Admin", description="Protected Super Admin account")
+        db.session.add(role)
+        db.session.flush()
+    user = User.query.filter(db.func.lower(User.email) == SUPER_ADMIN_EMAIL).first()
+    if user and (not user.role or user.role.name != "Super Admin" or not user.active):
+        user.role = role
+        user.active = True
+        db.session.commit()
+    else:
+        db.session.commit()
+    return user
+
+def _reassign_user_history_to_super_admin(deleted_user):
+    """Before permanent delete, move FK history to Super Admin so records stay visible."""
+    super_user = _ensure_super_admin_account()
+    if not super_user:
+        raise ValueError(f"Super Admin user {SUPER_ADMIN_EMAIL} does not exist yet. Create it before deleting users.")
+    if deleted_user.id == super_user.id:
+        raise ValueError("Super Admin cannot be deleted.")
+
+    from app.models import (
+        PolicyChangeLog, ClientApplication, LapsedPolicy, RecoveryCallLog, AuditLog,
+        ComplianceReview, QRTrustedDevice, QRLoginToken, TelesalesScriptSession,
+        SystemSetting, AgentTarget, SalesTarget, CallRecording
+    )
+
+    replacements = [
+        (PolicyChangeLog, "changed_by_id"),
+        (ClientApplication, "agent_id"),
+        (LapsedPolicy, "assigned_agent_id"),
+        (RecoveryCallLog, "agent_id"),
+        (AuditLog, "user_id"),
+        (ComplianceReview, "reviewer_id"),
+        (QRTrustedDevice, "user_id"),
+        (QRLoginToken, "approved_user_id"),
+        (TelesalesScriptSession, "agent_id"),
+        (SystemSetting, "updated_by_id"),
+        (AgentTarget, "user_id"),
+        (SalesTarget, "user_id"),
+        (CallRecording, "agent_id"),
+    ]
+    for model, field in replacements:
+        try:
+            db.session.query(model).filter(getattr(model, field) == deleted_user.id).update({field: super_user.id}, synchronize_session=False)
+        except Exception:
+            db.session.rollback()
+            raise
+    return super_user
+
 @auth_bp.route("/users/<int:user_id>/delete", methods=["POST"])
 @login_required
 def users_delete(user_id):
@@ -401,13 +463,21 @@ def users_delete(user_id):
     if user.id == current_user.id:
         flash("You cannot delete your own account while logged in.", "danger")
         return redirect(url_for("auth.users_manage"))
+    if _is_branch_manager_user(current_user) and not _is_admin_user(current_user):
+        flash("Branch Managers can add and view users, but only Admin can permanently delete users.", "danger")
+        return redirect(url_for("auth.users_manage"))
     email = user.email
     role = user.role.name if user.role else "User"
     branch = user.branch
-    db.session.delete(user)
-    db.session.commit()
-    _audit(current_user.id, "USER_DELETED", f"Deleted {role} {email}; branch={branch}")
-    flash("User deleted.", "info")
+    try:
+        super_user = _reassign_user_history_to_super_admin(user)
+        db.session.delete(user)
+        db.session.commit()
+        _audit(current_user.id, "USER_PERMANENTLY_DELETED", f"Permanently deleted {role} {email}; branch={branch}; history reassigned to Super Admin {super_user.email}")
+        flash("User permanently deleted. All linked history was moved under Super Admin.", "info")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"User could not be deleted: {exc}", "danger")
     return redirect(url_for("auth.users_manage"))
 
 

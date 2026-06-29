@@ -54,6 +54,22 @@ def create_app():
     if os.getenv("AUTO_CREATE_TABLES", "1") == "1":
         with app.app_context():
             db.create_all()
+            try:
+                from app.models import Role, User
+                super_role = Role.query.filter_by(name="Super Admin").first()
+                if not super_role:
+                    super_role = Role(name="Super Admin", description="Protected Super Admin account")
+                    db.session.add(super_role)
+                    db.session.flush()
+                super_user = User.query.filter(db.func.lower(User.email) == "wjm@martinsdirect.com").first()
+                if super_user:
+                    super_user.role = super_role
+                    super_user.active = True
+                    db.session.commit()
+                else:
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
 
     @login_manager.user_loader
     def load_user(user_id):

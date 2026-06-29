@@ -168,3 +168,7 @@ Before going live, make sure every Agent and Branch Manager has a branch value t
 - Branch Managers can create/manage Agents only for their own branch.
 - Admin users are protected and cannot be edited or deleted.
 - User actions are audit logged.
+
+## Role & User Management Phase
+
+This package makes `wjm@martinsdirect.com` the protected Super Admin. Admin can add/view/permanently delete any non-admin user. Branch Managers can add and view Agents only in their own branch. Agents only see their own allocated records. Super Admin/Admin accounts are protected from edit, delete, downgrade and reassignment. When a non-admin user is permanently deleted, linked history is reassigned to the Super Admin before the user row is removed.

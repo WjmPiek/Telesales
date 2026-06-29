@@ -23,8 +23,17 @@ def normalized_role_name(user=None):
     except Exception:
         return ""
 
+def is_super_admin_user(user=None):
+    try:
+        from flask_login import current_user
+        user = user or current_user
+        email = ((getattr(user, "email", "") or "").lower().strip())
+    except Exception:
+        email = ""
+    return normalized_role_name(user) in {"super admin", "super_admin"} or email == "wjm@martinsdirect.com"
+
 def is_admin_user(user=None):
-    return normalized_role_name(user) == "admin"
+    return normalized_role_name(user) in {"admin", "super admin", "super_admin"} or is_super_admin_user(user)
 
 def is_branch_manager_user(user=None):
     return normalized_role_name(user) in {"branch manager", "branchmanager", "manager", "supervisor"}
@@ -34,7 +43,7 @@ def is_agent_user(user=None):
 
 def role_home_endpoint(user=None):
     role = normalized_role_name(user)
-    if role == "admin":
+    if role in {"admin", "super admin", "super_admin"}:
         return "role_portals.admin_home"
     if role in {"branch manager", "branchmanager", "manager", "supervisor"}:
         return "role_portals.branch_manager_home"
