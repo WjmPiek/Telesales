@@ -34,8 +34,14 @@ def _is_admin():
 @login_required
 @permission_required("applications.view")
 def list_applications():
-    apps = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id).order_by(ClientApplication.created_at.desc()).limit(200).all()
-    return render_template("applications/list.html", apps=apps)
+    status_filter = (request.args.get("status") or "").strip().lower()
+    q = scope_by_branch(ClientApplication.query, ClientApplication, agent_col=ClientApplication.agent_id)
+    if status_filter in {"unsigned", "pending_signature", "pending-signature"}:
+        q = q.filter(ClientApplication.signed_at.is_(None))
+    elif status_filter:
+        q = q.filter(ClientApplication.status.ilike(status_filter.replace("_", " ")))
+    apps = q.order_by(ClientApplication.created_at.desc()).limit(200).all()
+    return render_template("applications/list.html", apps=apps, status_filter=status_filter)
 
 @applications_bp.route("/new", methods=["GET", "POST"])
 @login_required
