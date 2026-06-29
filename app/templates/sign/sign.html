@@ -17,6 +17,16 @@
 <body>
 <div class="topbar">
   <div class="portal-container">
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="mb-3">
+      {% for category, message in messages %}
+        <div class="alert alert-{{ 'danger' if category == 'danger' else category }} mb-2">{{ message }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
     <div class="d-flex justify-content-between align-items-center gap-3">
       <div>
         <div class="small text-white-50 text-uppercase fw-bold">Martin's Funerals</div>
@@ -71,7 +81,7 @@
               {% if key in received_docs %}<span class="badge text-bg-success">Received</span>{% else %}<span class="badge text-bg-warning">Outstanding</span>{% endif %}
             </div>
             <div class="small text-muted mb-3">Accepted: PDF, JPG, PNG, WEBP</div>
-            <form method="post" enctype="multipart/form-data">
+            <form method="post" action="{{url_for('signing.upload_fica_document', token=token)}}" enctype="multipart/form-data">
               <input type="hidden" name="action" value="upload_fica">
               <input type="hidden" name="document_type" value="{{key}}">
               <input class="form-control form-control-sm" type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.webp" required>

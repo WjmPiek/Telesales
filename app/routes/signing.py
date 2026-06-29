@@ -1,6 +1,6 @@
 import os, base64
 from datetime import datetime
-from flask import Blueprint, render_template, request, current_app, abort, send_file, session, redirect, url_for
+from flask import Blueprint, render_template, request, current_app, abort, send_file, session, redirect, url_for, flash
 from werkzeug.utils import secure_filename
 from app import db
 from app.models import ClientApplication, ApplicationSignature, ClientFicaDocument, DocumentSignature
@@ -83,7 +83,7 @@ def _required_fica_types(app_obj):
 def _fica_status(app_obj):
     required = _required_fica_types(app_obj)
     docs = ClientFicaDocument.query.filter_by(application_id=app_obj.id).all()
-    received = {d.document_type for d in docs if d.status != "Rejected"}
+    received = {d.document_type for d in docs if d.status in ("Received", "Reviewed")}
     outstanding = [t for t in required if t not in received]
     return required, received, outstanding, docs
 
@@ -114,14 +114,26 @@ def _allowed_file(filename):
 
 def _save_upload(app_obj, document_type, uploaded_file):
     if not uploaded_file or not uploaded_file.filename:
-        raise ValueError("No file selected")
+        raise ValueError("No file selected. Please choose a PDF, JPG, PNG or WEBP file before clicking Upload / Replace.")
     if not _allowed_file(uploaded_file.filename):
         raise ValueError("Only PDF, JPG, PNG or WEBP files are allowed")
+
     safe = secure_filename(uploaded_file.filename)
     folder = os.path.join(_upload_folder(), f"fica_app_{app_obj.id}")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"{document_type}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{safe}")
     uploaded_file.save(path)
+
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        raise ValueError("The uploaded file was empty or could not be saved. Please try again.")
+
+    # Keep history, but make the newest upload the active document.
+    # Older documents of the same type should no longer keep the item outstanding/rejected.
+    ClientFicaDocument.query.filter_by(
+        application_id=app_obj.id,
+        document_type=document_type
+    ).update({"status": "Replaced"})
+
     row = ClientFicaDocument(
         application_id=app_obj.id,
         document_type=document_type,
@@ -144,6 +156,35 @@ def _generate_review_docs(app_obj):
     generate_disclosure_pdf(app_obj, app_obj.disclosure_pdf_path)
     generate_welcome_pack(app_obj, app_obj.welcome_pack_path)
     generate_fica_pdf(app_obj, os.path.join(folder, f"fica_verification_{app_obj.id}.pdf"))
+
+
+@signing_bp.route("/<token>/upload-fica", methods=["POST"])
+def upload_fica_document(token):
+    app_obj = ClientApplication.query.filter_by(sign_token=token).first_or_404()
+    if app_obj.sign_token_revoked or app_obj.sign_token_used_at:
+        flash("This signing link has already been completed and cannot accept more uploads.", "danger")
+        return redirect(url_for("signing.sign_application", token=token))
+    if not session.get(_unlocked_key(app_obj.id)):
+        flash("Please unlock the secure page with the client ID number before uploading documents.", "danger")
+        return redirect(url_for("signing.sign_application", token=token))
+
+    try:
+        doc_type = request.form.get("document_type")
+        if doc_type not in FICA_LABELS:
+            raise ValueError("Invalid document type")
+        row = _save_upload(app_obj, doc_type, request.files.get("file"))
+        generate_fica_pdf(app_obj, os.path.join(_upload_folder(), f"fica_verification_{app_obj.id}.pdf"))
+        required, received, outstanding, docs = _fica_status(app_obj)
+        if outstanding:
+            app_obj.status = "FICA Outstanding"
+        elif app_obj.status in ("FICA Outstanding", "Signature Sent", "Draft", None):
+            app_obj.status = "Documents Received"
+        db.session.commit()
+        flash(f"{FICA_LABELS.get(doc_type, doc_type)} uploaded successfully: {row.original_filename}", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(str(e), "danger")
+    return redirect(url_for("signing.sign_application", token=token))
 
 
 @signing_bp.route("/<token>", methods=["GET", "POST"])
@@ -170,9 +211,12 @@ def sign_application(token):
                 doc_type = request.form.get("document_type")
                 if doc_type not in FICA_LABELS:
                     raise ValueError("Invalid document type")
-                _save_upload(app_obj, doc_type, request.files.get("file"))
+                row = _save_upload(app_obj, doc_type, request.files.get("file"))
                 generate_fica_pdf(app_obj, os.path.join(_upload_folder(), f"fica_verification_{app_obj.id}.pdf"))
+                required, received, outstanding, docs = _fica_status(app_obj)
+                app_obj.status = "FICA Outstanding" if outstanding else "Documents Received"
                 db.session.commit()
+                flash(f"{FICA_LABELS.get(doc_type, doc_type)} uploaded successfully: {row.original_filename}", "success")
                 return redirect(url_for("signing.sign_application", token=token))
 
             if action == "sign_document":
