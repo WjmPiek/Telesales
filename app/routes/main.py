@@ -141,14 +141,29 @@ def franchise_details():
     blocked = _portal_guard()
     if blocked: return blocked
     branch = selected_branch_arg() or user_branch() or "All branches"
-    users_q = User.query
-    if not can_view_all_branches() and user_branch():
-        users_q = users_q.filter(User.branch == user_branch())
+    q = scope_by_branch(LapsedPolicy.query, LapsedPolicy, selected_branch=selected_branch_arg())
+    company_expr = db.func.coalesce(db.func.nullif(LapsedPolicy.company_name, ''), db.func.nullif(LapsedPolicy.franchise, ''), db.func.nullif(LapsedPolicy.branch, ''), 'Unknown Company')
+    rows_q = db.session.query(
+        company_expr.label('company'),
+        LapsedPolicy.branch.label('branch'),
+        db.func.count(LapsedPolicy.id).label('policies'),
+        db.func.sum(db.case((LapsedPolicy.recovery_status == 'Suspense', 1), else_=0)).label('suspense'),
+        db.func.sum(db.case((LapsedPolicy.recovery_status.notin_(['Suspense','Closed','Rejected']), 1), else_=0)).label('active_leads'),
+    )
+    # Apply the same branch scope to company details.
     if can_view_all_branches() and selected_branch_arg():
-        users_q = users_q.filter(User.branch == selected_branch_arg())
-    rows = [[u.name, u.email, u.branch or "", u.role.name if u.role else "", "Active" if u.active else "Inactive"] for u in users_q.order_by(User.branch.asc(), User.name.asc()).limit(100).all()]
-    cards = [{"label":"Scope","value":branch},{"label":"Employees","value":len(rows)},{"label":"Leads","value":scope_by_branch(LapsedPolicy.query, LapsedPolicy).count()},{"label":"Applications","value":scope_by_branch(ClientApplication.query, ClientApplication).count()}]
-    return render_template("franchise_page.html", title="Franchise Details", subtitle="Branch/franchise overview with the related employee users.", headers=["Name","Email","Branch","Role","Status"], rows=rows, cards=cards)
+        rows_q = rows_q.filter(LapsedPolicy.branch == selected_branch_arg())
+    elif not can_view_all_branches() and user_branch():
+        rows_q = rows_q.filter(LapsedPolicy.branch == user_branch())
+    rows_q = rows_q.group_by(company_expr, LapsedPolicy.branch).order_by(company_expr.asc()).all()
+    rows = [[r.company, r.branch or '', int(r.policies or 0), int(r.active_leads or 0), int(r.suspense or 0)] for r in rows_q]
+    cards = [
+        {"label":"Scope","value":branch},
+        {"label":"Companies","value":len(rows)},
+        {"label":"Policies","value":sum(r[2] for r in rows)},
+        {"label":"Suspense","value":sum(r[4] for r in rows)},
+    ]
+    return render_template("franchise_page.html", title="Company Details", subtitle="Companies/business clients from imported data. Records stay separated by branch and company.", headers=["Company Name","Branch","Policies","Active Leads","Suspense"], rows=rows, cards=cards)
 
 @main_bp.route("/franchise/employees")
 @login_required
@@ -173,18 +188,18 @@ def monthly_performance():
 def monthly_figures():
     blocked = _portal_guard()
     if blocked: return blocked
-    return render_template("franchise_page.html", title="Monthly Figures", subtitle="Monthly figures section. Import/connect monthly figure data here.", headers=[], rows=[], cards=[])
+    return redirect(url_for("main.monthly_performance"))
 
 @main_bp.route("/monthly/royalties")
 @login_required
 def monthly_royalties():
     blocked = _portal_guard()
     if blocked: return blocked
-    return render_template("franchise_page.html", title="Royalties", subtitle="Royalty summary section. Connect royalty records when available.", headers=[], rows=[], cards=[])
+    return redirect(url_for("main.monthly_performance"))
 
 @main_bp.route("/monthly/finance")
 @login_required
 def monthly_finance():
     blocked = _portal_guard()
     if blocked: return blocked
-    return render_template("franchise_page.html", title="Finance", subtitle="Finance summary section for branch/franchise reporting.", headers=[], rows=[], cards=[])
+    return redirect(url_for("main.monthly_performance"))

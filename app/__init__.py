@@ -14,6 +14,29 @@ login_manager = LoginManager()
 login_manager.login_view = "auth.login"
 
 
+def _ensure_lapsed_policy_contact_columns(app):
+    """Small Render/PostgreSQL safety patch: add contact/suspense columns when the DB already exists."""
+    from sqlalchemy import text
+    with app.app_context():
+        try:
+            if not str(db.engine.url).startswith("postgresql"):
+                return
+            statements = [
+                "ALTER TABLE lapsed_policies ADD COLUMN IF NOT EXISTS company_name VARCHAR(160)",
+                "ALTER TABLE lapsed_policies ADD COLUMN IF NOT EXISTS id_number VARCHAR(30)",
+                "ALTER TABLE lapsed_policies ADD COLUMN IF NOT EXISTS email_address VARCHAR(255)",
+                "ALTER TABLE lapsed_policies ADD COLUMN IF NOT EXISTS suspense_reason TEXT",
+                "UPDATE lapsed_policies SET company_name = COALESCE(NULLIF(company_name,''), NULLIF(franchise,''), NULLIF(branch,'')) WHERE company_name IS NULL OR company_name = ''",
+                "UPDATE lapsed_policies SET suspense_reason = TRIM(BOTH ', ' FROM CONCAT(CASE WHEN id_number IS NULL OR TRIM(id_number) = '' THEN 'ID number, ' ELSE '' END, CASE WHEN (cell_number IS NULL OR TRIM(cell_number) = '') AND (home_tel IS NULL OR TRIM(home_tel) = '') THEN 'contact number, ' ELSE '' END, CASE WHEN email_address IS NULL OR TRIM(email_address) = '' THEN 'email address, ' ELSE '' END)) WHERE recovery_status <> 'Suspense' AND ((id_number IS NULL OR TRIM(id_number) = '') OR ((cell_number IS NULL OR TRIM(cell_number) = '') AND (home_tel IS NULL OR TRIM(home_tel) = '')) OR (email_address IS NULL OR TRIM(email_address) = ''))",
+                "UPDATE lapsed_policies SET recovery_status = 'Suspense', assigned_agent_id = NULL, next_action_date = NULL, comments = CONCAT(COALESCE(comments,''), CASE WHEN COALESCE(comments,'') = '' THEN '' ELSE E'\\n' END, 'SUSPENSE: Missing ', COALESCE(NULLIF(suspense_reason,''),'required contact details'), '. Client cannot be contacted until business client/branch fixes these policy details.') WHERE recovery_status <> 'Suspense' AND COALESCE(suspense_reason,'') <> ''",
+            ]
+            with db.engine.begin() as conn:
+                for stmt in statements:
+                    conn.execute(text(stmt))
+        except Exception:
+            app.logger.exception("Could not ensure lapsed policy contact/suspense columns")
+
+
 def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-change-me")
@@ -55,6 +78,10 @@ def create_app():
         with app.app_context():
             db.create_all()
             try:
+                _ensure_lapsed_policy_contact_columns(app)
+            except Exception:
+                pass
+            try:
                 from app.models import Role, User
                 super_role = Role.query.filter_by(name="Super Admin").first()
                 if not super_role:
@@ -70,6 +97,11 @@ def create_app():
                     db.session.commit()
             except Exception:
                 db.session.rollback()
+
+    try:
+        _ensure_lapsed_policy_contact_columns(app)
+    except Exception:
+        pass
 
     @login_manager.user_loader
     def load_user(user_id):

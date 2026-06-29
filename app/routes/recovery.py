@@ -32,9 +32,10 @@ LEAD_OPEN_STATUSES = [
 LEAD_CLOSED_STATUSES = ["Approved", "Rejected", "Closed", "Reinstated", "Suspense"]
 SUSPENSE_STATUS = "Suspense"
 
-ID_HEADERS = ["ID_Number", "ID Number", "IDNumber", "ID No", "ID_No", "SA ID", "SA_ID", "Identity Number", "Client ID Number"]
-CONTACT_HEADERS = ["Cell_Number", "Cell Number", "Cell", "Mobile", "Mobile Number", "Phone", "Contact Number", "home_tel", "Home Tel", "Telephone"]
-EMAIL_HEADERS = ["Email", "Email Address", "Email_Address", "E-mail", "E Mail"]
+ID_HEADERS = ["ID_Number", "ID Number", "IDNumber", "ID No", "ID_No", "ID", "SA ID", "SA_ID", "Identity Number", "Client ID Number", "IdentityNumber", "IdNumber", "RSA ID"]
+CONTACT_HEADERS = ["Cell_Number", "Cell Number", "Cell", "Mobile", "Mobile Number", "Phone", "Contact Number", "Contact_Number", "home_tel", "Home Tel", "Telephone", "Tel", "Client Cell", "Client Mobile"]
+EMAIL_HEADERS = ["Email", "Email Address", "Email_Address", "E-mail", "E Mail", "Client Email", "EmailAddress"]
+COMPANY_HEADERS = ["Company", "Company Name", "Company_Name", "Franchise", "Business Client", "Business Client Name", "Client Company", "Employer", "CollectedatBranch", "Collected at Branch", "Branch"]
 
 
 def _clean_import_value(value):
@@ -46,16 +47,27 @@ def _clean_import_value(value):
     return txt
 
 
+def _norm_header(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
 def _row_value(data, names):
-    # Handles exact headers and headers with different spacing/case.
-    normalised = {str(k or "").strip().lower().replace(" ", "_"): v for k, v in data.items()}
+    # Handles exact headers, spacing/case changes, punctuation changes and common import variants.
+    normalised = {_norm_header(k): v for k, v in data.items()}
     for name in names:
         if name in data and _clean_import_value(data.get(name)):
             return _clean_import_value(data.get(name))
-        key = str(name).strip().lower().replace(" ", "_")
+        key = _norm_header(name)
         if key in normalised and _clean_import_value(normalised.get(key)):
             return _clean_import_value(normalised.get(key))
     return ""
+
+
+def _is_missing(value):
+    txt = _clean_import_value(value)
+    if not txt:
+        return True
+    return txt.lower() in {"0", "000", "0000000000000", "unknown", "not available", "missing", "no email", "no phone", "no cell"}
 
 
 def _missing_contact_fields(data):
@@ -63,11 +75,13 @@ def _missing_contact_fields(data):
     id_number = _row_value(data, ID_HEADERS)
     contact_number = _row_value(data, CONTACT_HEADERS)
     email_address = _row_value(data, EMAIL_HEADERS)
-    if not id_number:
+    id_digits = re.sub(r"\D", "", id_number or "")
+    contact_digits = re.sub(r"\D", "", contact_number or "")
+    if _is_missing(id_number) or not id_digits:
         missing.append("ID number")
-    if not contact_number:
+    if _is_missing(contact_number) or not contact_digits:
         missing.append("contact number")
-    if not email_address:
+    if _is_missing(email_address) or "@" not in str(email_address):
         missing.append("email address")
     return missing, id_number, contact_number, email_address
 
@@ -75,6 +89,37 @@ def _missing_contact_fields(data):
 def _append_comment(existing, note):
     existing = (existing or "").strip()
     return (existing + "\n" + note).strip() if existing else note
+
+
+
+def _policy_missing_fields(policy):
+    missing = []
+    if _is_missing(getattr(policy, "id_number", None)):
+        missing.append("ID number")
+    if _is_missing(getattr(policy, "cell_number", None)) and _is_missing(getattr(policy, "home_tel", None)):
+        missing.append("contact number")
+    if _is_missing(getattr(policy, "email_address", None)) or "@" not in str(getattr(policy, "email_address", "") or ""):
+        missing.append("email address")
+    return missing
+
+
+def _move_missing_policies_to_suspense(query=None):
+    query = query or LapsedPolicy.query
+    moved = 0
+    for p in query.filter(LapsedPolicy.recovery_status != SUSPENSE_STATUS).all():
+        missing = _policy_missing_fields(p)
+        if missing:
+            p.recovery_status = SUSPENSE_STATUS
+            p.assigned_agent_id = None
+            p.next_action_date = None
+            p.suspense_reason = ", ".join(missing)
+            if not getattr(p, "company_name", None):
+                p.company_name = p.franchise or p.branch
+            p.comments = _append_comment(p.comments, "SUSPENSE: Missing " + ", ".join(missing) + ". Client cannot be contacted until business client/branch fixes these policy details.")
+            moved += 1
+    if moved:
+        db.session.commit()
+    return moved
 
 OUTCOME_TO_STATUS = {
     "No Answer": "No Answer",
@@ -232,6 +277,16 @@ def client_timeline(policy_id):
     return render_template("recovery/timeline.html", p=p, calls=calls, applications=applications, sessions=sessions, signatures=signatures, fica_docs=fica_docs, events=events)
 
 
+
+@recovery_bp.route("/suspense/rebuild", methods=["POST"])
+@login_required
+@permission_required("recovery.import")
+def rebuild_suspense():
+    base = scope_by_branch(LapsedPolicy.query, LapsedPolicy, agent_col=LapsedPolicy.assigned_agent_id)
+    moved = _move_missing_policies_to_suspense(base)
+    flash(f"Suspense check complete. {moved} policy/client record(s) moved to Suspense.", "success" if moved else "info")
+    return redirect(url_for("recovery.suspense"))
+
 @recovery_bp.route("/suspense")
 @login_required
 @permission_required("recovery.view")
@@ -247,6 +302,9 @@ def suspense():
         allow_agent_fallback=False,
     )
     policies = query.order_by(LapsedPolicy.branch.asc().nullslast(), LapsedPolicy.imported_at.desc()).all()
+    for p in policies:
+        if not getattr(p, "company_name", None):
+            p.company_name = p.franchise or p.branch
 
     branch_groups = {}
     for p in policies:
@@ -286,6 +344,7 @@ def import_lapsed():
 
         missing_fields, id_number, contact_number, email_address = _missing_contact_fields(data)
         branch = _row_value(data, ["CollectedatBranch", "Collected at Branch", "Branch", "Franchise"])
+        company_name = _row_value(data, COMPANY_HEADERS) or branch or _row_value(data, ["Franchise"])
         comments = data.get("Comments")
         recovery_status = "Imported"
         next_action = date.today()
@@ -304,7 +363,7 @@ def import_lapsed():
             count += 1
 
         lp = LapsedPolicy(
-            franchise=data.get("Franchise"), member_id=str(data.get("Member_ID") or ""), policy_number=str(policy_number),
+            franchise=company_name, company_name=company_name, id_number=id_number, email_address=email_address, suspense_reason=", ".join(missing_fields), member_id=str(data.get("Member_ID") or ""), policy_number=str(policy_number),
             surname=data.get("Surname"), initials=data.get("Initials"), cell_number=contact_number or str(data.get("Cell_Number") or ""),
             home_tel=str(data.get("home_tel") or ""), address=data.get("Address"), premium_due=data.get("PremiumDue") or 0,
             total=data.get("Total") or 0, payment_method=data.get("PaymentMethod"), branch=branch,
