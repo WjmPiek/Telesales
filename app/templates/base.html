@@ -24,6 +24,14 @@
     <a class="sidebar-brand" href="{{ url_for('role_portals.home') }}">Martin's TeleSales</a>
     <div class="sidebar-section">
       <a class="side-link" href="{{ url_for('role_portals.workspace') }}"><span>Workspace</span></a>
+      <a class="side-link" href="{{ url_for('recovery.next_client') }}"><span>Next Client</span></a>
+      <a class="side-link" href="{{ url_for('recovery.queue') }}"><span>{{ 'My Clients' if not (admin_role or manager_role) else 'Import / Leads' }}</span></a>
+      <a class="side-link" href="{{ url_for('recovery.callbacks') }}"><span>Callbacks</span></a>
+      <a class="side-link" href="{{ url_for('applications.list_applications') }}"><span>Applications</span></a>
+      <a class="side-link" href="{{ url_for('documents.document_dashboard') }}"><span>Documents</span></a>
+      {% if admin_role %}<a class="side-link" href="{{ url_for('policies.import_policies') }}"><span>Import Policies</span></a><a class="side-link" href="{{ url_for('policies.list_products') }}"><span>Policy Data</span></a>{% endif %}
+      {% if admin_role or manager_role %}<a class="side-link" href="{{ url_for('qa.qa_dashboard') }}"><span>QA</span></a><a class="side-link" href="{{ url_for('reports.index') }}"><span>Reports</span></a><a class="side-link" href="{{ url_for('allocation.index') }}"><span>Allocation</span></a>{% endif %}
+      {% if admin_role %}<a class="side-link" href="{{ url_for('wallboard.index') }}"><span>Wallboard</span></a><a class="side-link" href="{{ url_for('recovery.suspense') }}"><span>Suspense</span></a><a class="side-link" href="{{ url_for('targets.index') }}"><span>Targets</span></a>{% endif %}
       {% if admin_role %}<a class="side-link" href="{{ url_for('role_portals.admin_home') }}"><span>Admin Portal</span></a>{% endif %}
       {% if manager_role %}<a class="side-link" href="{{ url_for('role_portals.branch_manager_home') }}"><span>Branch Portal</span></a>{% endif %}
       {% if not (admin_role or manager_role) %}<a class="side-link" href="{{ url_for('role_portals.agent_home') }}"><span>Agent Portal</span></a>{% endif %}
@@ -33,13 +41,7 @@
       {% if admin_role or manager_role %}
       <details class="side-group"><summary class="side-toggle"><span>Company Details</span><span class="nav-badge">2</span></summary><div class="side-submenu"><a href="{{ url_for('main.franchise_details') }}">Company Details</a><a href="{{ url_for('main.franchise_employees') }}">Employees</a></div></details>
       {% endif %}
-      <a class="side-link" href="{{ url_for('recovery.queue') }}"><span>{{ 'My Clients' if not (admin_role or manager_role) else 'Import / Leads' }}</span></a>
-      {% if admin_role %}<a class="side-link" href="{{ url_for('policies.list_products') }}"><span>Policy Data</span></a><a class="side-link" href="{{ url_for('policies.import_policies') }}"><span>Import Policies</span></a>{% endif %}
-      <a class="side-link" href="{{ url_for('applications.list_applications') }}"><span>Applications</span></a>
-      <a class="side-link" href="{{ url_for('documents.document_dashboard') }}"><span>Documents</span></a>
-      <a class="side-link" href="{{ url_for('recovery.callbacks') }}"><span>Callbacks</span></a>
-      {% if admin_role or manager_role %}<a class="side-link" href="{{ url_for('qa.qa_dashboard') }}"><span>QA</span></a><a class="side-link" href="{{ url_for('reports.index') }}"><span>Reports</span></a><a class="side-link" href="{{ url_for('allocation.index') }}"><span>Allocation</span></a>{% endif %}
-      {% if admin_role %}<a class="side-link" href="{{ url_for('wallboard.index') }}"><span>Wallboard</span></a><a class="side-link" href="{{ url_for('recovery.suspense') }}"><span>Suspense</span></a><a class="side-link" href="{{ url_for('targets.index') }}"><span>Targets</span></a><a class="side-link" href="{{ url_for('security_center.index') }}"><span>Security Center</span></a><a class="side-link" href="{{ url_for('settings.index') }}"><span>Settings</span></a>{% endif %}
+      {% if admin_role %}<a class="side-link" href="{{ url_for('security_center.index') }}"><span>Security Center</span></a><a class="side-link" href="{{ url_for('settings.index') }}"><span>Settings</span></a>{% endif %}
     </div>
     <div class="sidebar-footer"><div class="small mb-2">{{ current_user.name }}<br><span style="opacity:.8">{{ current_user.email }}</span></div><a class="btn btn-light btn-sm w-100" href="{{ url_for('auth.logout') }}">Logout</a></div>
   </aside>

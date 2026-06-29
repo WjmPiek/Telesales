@@ -71,7 +71,10 @@ def _ensure_client_fica_document_columns(app):
 
 def create_app():
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-change-me")
+    secret_key = os.getenv("SECRET_KEY")
+    if not secret_key and os.getenv("FLASK_ENV") == "production":
+        raise RuntimeError("SECRET_KEY must be set in production")
+    app.config["SECRET_KEY"] = secret_key or "dev-secret-change-me"
     db_url = os.getenv("DATABASE_URL", "sqlite:///dev.db")
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)

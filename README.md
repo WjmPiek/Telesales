@@ -20,12 +20,9 @@ python seed.py
 python run.py
 ```
 
-Default login:
+First production admin user:
 
-```text
-wjm@martinsdirect.com
-Renette7
-```
+Run `python seed.py` once. You can set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD`; otherwise a temporary password is printed. Change the seeded password immediately in production. Do not commit real passwords to GitHub or documentation.
 
 ## Render deployment
 
@@ -196,3 +193,28 @@ Tested locally:
 - Application status changes from FICA Outstanding to Documents Received after required documents are uploaded.
 - Key admin pages render after login.
 - User deletion reassigns lapsed policy history to Super Admin before permanent delete.
+
+
+## Production safety defaults added
+
+This cleaned package removes bundled Git history, Python bytecode caches and sample upload files from the distributable zip.
+
+Recommended Render environment variables:
+
+```text
+AUTO_CREATE_TABLES=0      # after migrations are in place
+UPLOAD_FOLDER=/var/data/uploads  # only if you add a Render persistent disk
+```
+
+For long-term document storage, use Google Drive, S3, Supabase Storage or another persistent storage provider instead of Render's normal application filesystem.
+
+Daily workflow priority:
+
+1. Workspace
+2. Next Client
+3. My Clients / Import Leads
+4. Callbacks
+5. Applications
+6. Documents
+7. QA / Reports / Wallboard / Targets
+8. Admin, Security and Settings
