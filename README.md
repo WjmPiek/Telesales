@@ -172,3 +172,8 @@ Before going live, make sure every Agent and Branch Manager has a branch value t
 ## Role & User Management Phase
 
 This package makes `wjm@martinsdirect.com` the protected Super Admin. Admin can add/view/permanently delete any non-admin user. Branch Managers can add and view Agents only in their own branch. Agents only see their own allocated records. Super Admin/Admin accounts are protected from edit, delete, downgrade and reassignment. When a non-admin user is permanently deleted, linked history is reassigned to the Super Admin before the user row is removed.
+
+
+## Phase 15 - CRM Workspace Redesign
+
+This package adds a unified CRM workspace at `/workspace` so the dashboard/agent workspace no longer disappears when users move between tabs. Admin can select any branch/agent, Branch Managers are locked to their own branch, and Agents are locked to their own data. No database schema changes are required.

@@ -13,7 +13,7 @@ from app.services.pdf_service import generate_telesales_script_pdf, generate_app
 from app.services.email_service import send_email
 from app.services.whatsapp_service import send_whatsapp_message
 from app.services.compliance_service import dob_from_sa_id, age_from_dob, classify_product_template, assert_application_rules
-from app.services.branch_access import scope_by_branch, ensure_branch_access
+from app.services.branch_access import scope_by_branch, ensure_branch_access, can_view_all_branches, is_branch_manager, user_branch
 
 recovery_bp = Blueprint("recovery", __name__, url_prefix="/recovery")
 
@@ -29,7 +29,52 @@ LEAD_OPEN_STATUSES = [
     "FICA Outstanding",
     "QA Review",
 ]
-LEAD_CLOSED_STATUSES = ["Approved", "Rejected", "Closed", "Reinstated"]
+LEAD_CLOSED_STATUSES = ["Approved", "Rejected", "Closed", "Reinstated", "Suspense"]
+SUSPENSE_STATUS = "Suspense"
+
+ID_HEADERS = ["ID_Number", "ID Number", "IDNumber", "ID No", "ID_No", "SA ID", "SA_ID", "Identity Number", "Client ID Number"]
+CONTACT_HEADERS = ["Cell_Number", "Cell Number", "Cell", "Mobile", "Mobile Number", "Phone", "Contact Number", "home_tel", "Home Tel", "Telephone"]
+EMAIL_HEADERS = ["Email", "Email Address", "Email_Address", "E-mail", "E Mail"]
+
+
+def _clean_import_value(value):
+    if value is None:
+        return ""
+    txt = str(value).strip()
+    if txt.lower() in {"none", "nan", "null", "n/a", "na", "-"}:
+        return ""
+    return txt
+
+
+def _row_value(data, names):
+    # Handles exact headers and headers with different spacing/case.
+    normalised = {str(k or "").strip().lower().replace(" ", "_"): v for k, v in data.items()}
+    for name in names:
+        if name in data and _clean_import_value(data.get(name)):
+            return _clean_import_value(data.get(name))
+        key = str(name).strip().lower().replace(" ", "_")
+        if key in normalised and _clean_import_value(normalised.get(key)):
+            return _clean_import_value(normalised.get(key))
+    return ""
+
+
+def _missing_contact_fields(data):
+    missing = []
+    id_number = _row_value(data, ID_HEADERS)
+    contact_number = _row_value(data, CONTACT_HEADERS)
+    email_address = _row_value(data, EMAIL_HEADERS)
+    if not id_number:
+        missing.append("ID number")
+    if not contact_number:
+        missing.append("contact number")
+    if not email_address:
+        missing.append("email address")
+    return missing, id_number, contact_number, email_address
+
+
+def _append_comment(existing, note):
+    existing = (existing or "").strip()
+    return (existing + "\n" + note).strip() if existing else note
 
 OUTCOME_TO_STATUS = {
     "No Answer": "No Answer",
@@ -187,6 +232,39 @@ def client_timeline(policy_id):
     return render_template("recovery/timeline.html", p=p, calls=calls, applications=applications, sessions=sessions, signatures=signatures, fica_docs=fica_docs, events=events)
 
 
+@recovery_bp.route("/suspense")
+@login_required
+@permission_required("recovery.view")
+def suspense():
+    """Branch-specific suspense list for imported policies with missing contact details."""
+    if not (can_view_all_branches() or is_branch_manager()):
+        abort(403)
+    selected_branch = (request.args.get("branch") or "").strip()
+    query = scope_by_branch(
+        LapsedPolicy.query.filter(LapsedPolicy.recovery_status == SUSPENSE_STATUS),
+        LapsedPolicy,
+        selected_branch=selected_branch,
+        allow_agent_fallback=False,
+    )
+    policies = query.order_by(LapsedPolicy.branch.asc().nullslast(), LapsedPolicy.imported_at.desc()).all()
+
+    branch_groups = {}
+    for p in policies:
+        branch = (p.branch or p.franchise or "Unknown Branch").strip()
+        branch_groups.setdefault(branch, []).append(p)
+
+    branch_query = db.session.query(LapsedPolicy.branch).filter(
+        LapsedPolicy.recovery_status == SUSPENSE_STATUS,
+        LapsedPolicy.branch.isnot(None),
+        LapsedPolicy.branch != ""
+    )
+    if not can_view_all_branches() and user_branch():
+        branch_query = branch_query.filter(LapsedPolicy.branch == user_branch())
+    branches = [r[0] for r in branch_query.distinct().order_by(LapsedPolicy.branch.asc()).all()]
+
+    return render_template("recovery/suspense.html", branch_groups=branch_groups, branches=branches, selected_branch=selected_branch)
+
+
 @recovery_bp.route("/import", methods=["POST"])
 @login_required
 @permission_required("recovery.import")
@@ -199,19 +277,44 @@ def import_lapsed():
     ws = wb.active
     headers = [c.value for c in ws[1]]
     count = 0
+    suspense_count = 0
     for row in ws.iter_rows(min_row=2, values_only=True):
         data = dict(zip(headers, row))
-        if not data.get("Policy_Number"):
+        policy_number = _row_value(data, ["Policy_Number", "Policy Number", "PolicyNumber"])
+        if not policy_number:
             continue
+
+        missing_fields, id_number, contact_number, email_address = _missing_contact_fields(data)
+        branch = _row_value(data, ["CollectedatBranch", "Collected at Branch", "Branch", "Franchise"])
+        comments = data.get("Comments")
+        recovery_status = "Imported"
+        next_action = date.today()
+        assigned_agent = current_user.id
+
+        if missing_fields:
+            recovery_status = SUSPENSE_STATUS
+            next_action = None
+            assigned_agent = None
+            suspense_count += 1
+            comments = _append_comment(
+                comments,
+                "SUSPENSE: Missing " + ", ".join(missing_fields) + ". Client cannot be contacted until business client/branch fixes these policy details."
+            )
+        else:
+            count += 1
+
         lp = LapsedPolicy(
-            franchise=data.get("Franchise"), member_id=str(data.get("Member_ID") or ""), policy_number=str(data.get("Policy_Number") or ""),
-            surname=data.get("Surname"), initials=data.get("Initials"), cell_number=str(data.get("Cell_Number") or ""),
+            franchise=data.get("Franchise"), member_id=str(data.get("Member_ID") or ""), policy_number=str(policy_number),
+            surname=data.get("Surname"), initials=data.get("Initials"), cell_number=contact_number or str(data.get("Cell_Number") or ""),
             home_tel=str(data.get("home_tel") or ""), address=data.get("Address"), premium_due=data.get("PremiumDue") or 0,
-            total=data.get("Total") or 0, payment_method=data.get("PaymentMethod"), branch=data.get("CollectedatBranch"),
-            comments=data.get("Comments"), assigned_agent_id=current_user.id, recovery_status="Imported", next_action_date=date.today()
+            total=data.get("Total") or 0, payment_method=data.get("PaymentMethod"), branch=branch,
+            comments=comments, assigned_agent_id=assigned_agent, recovery_status=recovery_status, next_action_date=next_action
         )
-        db.session.add(lp); count += 1
+        db.session.add(lp)
     db.session.commit()
+    if suspense_count:
+        flash(f"Import complete. Call queue: {count}. Suspense: {suspense_count} clients missing ID number, contact number or email address.", "warning")
+        return redirect(url_for("recovery.suspense"))
     flash(f"Imported {count} lapsed policies", "success")
     return redirect(url_for("recovery.queue"))
 

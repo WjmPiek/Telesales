@@ -93,3 +93,140 @@ def agent_home():
     callbacks = LapsedPolicy.query.filter(LapsedPolicy.assigned_agent_id == agent_id, LapsedPolicy.recovery_status == "Callback").order_by(LapsedPolicy.next_action_date.asc()).limit(10).all()
     my_apps = ClientApplication.query.filter(ClientApplication.agent_id == agent_id).order_by(ClientApplication.created_at.desc()).limit(10).all()
     return render_template("role_portals/agent.html", stats=stats, callbacks=callbacks, my_apps=my_apps)
+
+
+# PHASE 15 - unified CRM workspace
+@role_portals_bp.route("/workspace")
+@login_required
+def workspace():
+    """Unified CRM workspace for Admin, Branch Manager and Agent.
+
+    Admin can select any branch and any agent. Branch Managers are locked to
+    their own branch and may select agents in that branch. Agents are locked to
+    their own agent record. All client/application/callback data is then scoped
+    by that context so moving between tabs no longer loses the agent dashboard.
+    """
+    branch = request.args.get("branch") or None
+    agent_id = request.args.get("agent_id", type=int)
+    client_id = request.args.get("client_id", type=int)
+
+    is_admin = is_admin_user()
+    is_manager = is_branch_manager_user()
+    is_agent = is_agent_user()
+
+    if is_admin:
+        branches = branch_choices_from_model(db, LapsedPolicy)
+        if branch in ("", "all", "All"):
+            branch = None
+        agent_query = User.query
+        if branch:
+            agent_query = agent_query.filter(User.branch == branch)
+        agents = agent_query.order_by(User.branch.asc(), User.name.asc()).all()
+    elif is_manager:
+        branch = user_branch()
+        branches = [branch] if branch else []
+        agents = User.query.filter(User.branch == branch).order_by(User.name.asc()).all() if branch else []
+        if agent_id and not any(a.id == agent_id for a in agents):
+            flash("You can only open agents in your own branch.", "danger")
+            return redirect(url_for("role_portals.workspace"))
+    elif is_agent:
+        branch = current_user.branch
+        branches = [branch] if branch else []
+        agents = [current_user]
+        agent_id = current_user.id
+    else:
+        flash("Workspace access required.", "danger")
+        return redirect(url_for("main.dashboard"))
+
+    selected_agent = None
+    if agent_id:
+        selected_agent = db.session.get(User, agent_id)
+        if not selected_agent:
+            flash("Selected agent was not found.", "warning")
+            agent_id = None
+        elif is_manager and selected_agent.branch != branch:
+            flash("You can only open agents in your own branch.", "danger")
+            return redirect(url_for("role_portals.workspace"))
+        elif is_agent and selected_agent.id != current_user.id:
+            flash("Agents can only open their own workspace.", "danger")
+            return redirect(url_for("role_portals.workspace"))
+
+    if not selected_agent and agents:
+        selected_agent = agents[0] if (is_agent or is_manager) else None
+        if selected_agent and not agent_id:
+            agent_id = selected_agent.id
+
+    stats = _base_stats(branch=branch, agent_id=agent_id)
+
+    lead_query = LapsedPolicy.query
+    app_query = ClientApplication.query
+    call_query = RecoveryCallLog.query
+    script_query = TelesalesScriptSession.query
+
+    if branch:
+        lead_query = lead_query.filter(LapsedPolicy.branch == branch)
+        app_query = app_query.filter(ClientApplication.branch == branch)
+        script_query = script_query.filter(TelesalesScriptSession.branch == branch)
+    if agent_id:
+        lead_query = lead_query.filter(LapsedPolicy.assigned_agent_id == agent_id)
+        app_query = app_query.filter(ClientApplication.agent_id == agent_id)
+        call_query = call_query.filter(RecoveryCallLog.agent_id == agent_id)
+        script_query = script_query.filter(TelesalesScriptSession.agent_id == agent_id)
+
+    clients = lead_query.order_by(LapsedPolicy.next_action_date.asc().nullslast(), LapsedPolicy.imported_at.desc()).limit(25).all()
+    callbacks = lead_query.filter(LapsedPolicy.recovery_status == "Callback").order_by(LapsedPolicy.next_action_date.asc().nullslast()).limit(10).all()
+    applications = app_query.order_by(ClientApplication.created_at.desc()).limit(10).all()
+    recent_calls = call_query.order_by(RecoveryCallLog.created_at.desc()).limit(10).all()
+    qa_items = script_query.filter(TelesalesScriptSession.status == "Completed", TelesalesScriptSession.qa_result.is_(None)).order_by(TelesalesScriptSession.completed_at.desc().nullslast()).limit(10).all()
+
+    selected_client = None
+    selected_client_apps = []
+    selected_client_calls = []
+    selected_client_scripts = []
+    if client_id:
+        selected_client = db.session.get(LapsedPolicy, client_id)
+        allowed = False
+        if selected_client:
+            if is_admin:
+                allowed = (not branch or selected_client.branch == branch) and (not agent_id or selected_client.assigned_agent_id == agent_id)
+            elif is_manager:
+                allowed = selected_client.branch == branch and (not agent_id or selected_client.assigned_agent_id == agent_id)
+            elif is_agent:
+                allowed = selected_client.assigned_agent_id == current_user.id
+        if not allowed:
+            selected_client = None
+            flash("You do not have access to that client in this workspace context.", "danger")
+        else:
+            selected_client_apps = ClientApplication.query.filter(ClientApplication.lapsed_policy_id == selected_client.id).order_by(ClientApplication.created_at.desc()).all()
+            selected_client_calls = RecoveryCallLog.query.filter(RecoveryCallLog.lapsed_policy_id == selected_client.id).order_by(RecoveryCallLog.created_at.desc()).all()
+            selected_client_scripts = TelesalesScriptSession.query.filter(TelesalesScriptSession.lapsed_policy_id == selected_client.id).order_by(TelesalesScriptSession.created_at.desc()).all()
+
+    branch_summary = {
+        "branch": branch or "All Branches",
+        "agents": len(agents),
+        "clients": lead_query.count(),
+        "callbacks": lead_query.filter(LapsedPolicy.recovery_status == "Callback").count(),
+        "applications": app_query.count(),
+        "qa_pending": script_query.filter(TelesalesScriptSession.status == "Completed", TelesalesScriptSession.qa_result.is_(None)).count(),
+    }
+    return render_template(
+        "role_portals/workspace.html",
+        stats=stats,
+        branches=branches,
+        agents=agents,
+        active_branch=branch,
+        active_agent=selected_agent,
+        clients=clients,
+        callbacks=callbacks,
+        applications=applications,
+        recent_calls=recent_calls,
+        qa_items=qa_items,
+        selected_client=selected_client,
+        selected_client_apps=selected_client_apps,
+        selected_client_calls=selected_client_calls,
+        selected_client_scripts=selected_client_scripts,
+        branch_summary=branch_summary,
+        is_admin=is_admin,
+        is_manager=is_manager,
+        is_agent=is_agent,
+    )

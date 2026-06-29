@@ -1,0 +1,33 @@
+Branch Access Control Package
+=============================
+
+Built on top of TeleSales Phase 9.
+
+What was added
+--------------
+1. Branch data isolation helper: app/services/branch_access.py
+2. Agent/Branch Manager data scoping:
+   - Agents only see records in their assigned branch.
+   - If an agent has no branch, they only see records directly assigned to their user ID.
+   - Branch Managers/Managers/QA/Compliance are limited to their own branch.
+   - Admin can view all branches and can use branch filters.
+3. Protected object-level access:
+   - Recovery client timeline/call/script/start application pages
+   - Application view/signing links/downloads
+   - QA review pages and FICA review
+   - Document dashboard/application documents/FICA downloads
+4. Manager/report/document/QA dashboards now respect branch access.
+5. Admin User Branch Access page:
+   - Admin can approve/save a user as Agent or Branch Manager.
+   - Admin must assign a branch.
+   - Branch assignment is the control used for data visibility.
+
+Important setup steps
+---------------------
+- Go to Admin > User Approvals.
+- For every Agent and Branch Manager, set the exact branch name used in your leads/applications.
+- Branch names must match the branch values in imported lapsed policies/applications.
+- Test using one agent login before deploying to production.
+
+No new database tables were added.
+Uses existing users.branch, lapsed_policies.branch, client_applications.branch and telesales_script_sessions.branch fields.
